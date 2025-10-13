@@ -20,3 +20,4 @@ pyodbc
 pillow
 wfastcgi
 pymssql
+python-dotenv
