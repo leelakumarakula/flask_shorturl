@@ -18,3 +18,5 @@ user_agents
 qrcode
 pyodbc
 pillow
+wfastcgi
+pymssql

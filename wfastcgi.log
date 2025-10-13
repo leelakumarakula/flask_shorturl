@@ -1,0 +1,2 @@
+2025-10-13 03:48:16.499337: wfastcgi.py will restart when files in C:\inetpub\wwwroot\flask_shorturl\ are changed: .*((\.py)|(\.config))$
+2025-10-13 03:48:16.500452: wfastcgi.py 3.0.0 initialized

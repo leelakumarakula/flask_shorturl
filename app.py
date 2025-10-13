@@ -22,7 +22,8 @@ import os
 app = Flask(__name__)
 CORS(app)
 app.secret_key = "8y56jJ3YQwGh4QvNf/saEgyrGw2FjHzsQV5n+6k6Skw=abcdefghijk=/568390ogsariblmnrdig"  # use env var in prod
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mssql+pyodbc://leela:Leela%40123@DESKTOP-AESO10A/minilink1?driver=ODBC+Driver+17+for+SQL+Server'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mssql+pymssql://vinodh:Ethically7-Jurist-Rumb33w@10.100.0.37/SHORTURL'
+
 
  
  
