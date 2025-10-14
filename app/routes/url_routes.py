@@ -30,9 +30,13 @@ def get_country_from_ip(ip: str | None) -> str:
     try:
         resp = requests.get(f"https://ipwho.is/{ip}", timeout=3)
         data = resp.json()
-        return data.get("country", {}).get("name", "Unknown")
+        if data.get("success"):
+            return data.get("country")
+        else:
+            return "Unknown"
     except Exception:
         return "Unknown"
+
 
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
