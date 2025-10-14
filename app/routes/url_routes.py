@@ -172,7 +172,10 @@ def redirection(short_url):
 
     # --- 🧮 Log real user analytics ---
     if browser.lower() != "other" and os_family.lower() != "other":
-        try:
+           # Optionally log but don’t count analytics
+        print(f"Skipped bot or preview visit: {user_agent_str} from {ip_address}")
+        return redirect(url_entry.long, code=302)     
+    try:
             analytics = UrlAnalytics(
                 url_id=url_entry.id_,
                 user_agent=user_agent_str,
@@ -185,8 +188,8 @@ def redirection(short_url):
             )
             db.session.add(analytics)
             db.session.commit()
-        except Exception:
-            db.session.rollback()
+    except Exception:
+            db.session.rollback()  
 
     return redirect(url_entry.long, code=302)
 
