@@ -147,7 +147,7 @@ def redirection(short_url):
     os_family = ua.os.family or "Unknown"
     os_version = ua.os.version_string or ""
     platform = f"{os_family} {os_version}".strip()
-   
+
     xff = request.headers.get('X-Forwarded-For', '')
     if xff:
         ip_address = xff.split(',')[0].strip()
@@ -156,7 +156,20 @@ def redirection(short_url):
 
     country = get_country_from_ip(ip_address) if ip_address else "Unknown"
 
+    # --- 🛡️ BOT / PREVIEW FILTER SECTION ---
+    bot_keywords = [
+        "bot", "crawler", "spider", "preview", "fetch", "scan",
+        "SafeLinks", "Teams", "Outlook", "Skype", "Microsoft Office",
+        "LinkExpander", "Slackbot", "Discordbot", "WhatsApp", "Facebook",
+        "Twitterbot", "Google-Read-Aloud"
+    ]
 
+    if any(b.lower() in user_agent_str.lower() for b in bot_keywords):
+        # Optionally log but don’t count analytics
+        print(f"Skipped bot or preview visit: {user_agent_str} from {ip_address}")
+        return redirect(url_entry.long, code=302)
+
+    # --- 🧮 Log real user analytics ---
     try:
         analytics = UrlAnalytics(
             url_id=url_entry.id_,
@@ -170,10 +183,12 @@ def redirection(short_url):
         )
         db.session.add(analytics)
         db.session.commit()
-    except Exception:
+    except Exception as e:
         db.session.rollback()
+        print(f"Error saving analytics: {e}")
 
     return redirect(url_entry.long, code=302)
+
 
 
 @url_bp.route('/analytics/<short_url>')
