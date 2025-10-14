@@ -171,22 +171,22 @@ def redirection(short_url):
         return redirect(url_entry.long, code=302)
 
     # --- 🧮 Log real user analytics ---
-    try:
-        analytics = UrlAnalytics(
-            url_id=url_entry.id_,
-            user_agent=user_agent_str,
-            browser=browser,
-            browser_version=browser_version,
-            platform=platform,
-            os=os_family,
-            ip_address=ip_address,
-            country=country
-        )
-        db.session.add(analytics)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error saving analytics: {e}")
+    if browser.lower() != "other" and os_family.lower() != "other":
+        try:
+            analytics = UrlAnalytics(
+                url_id=url_entry.id_,
+                user_agent=user_agent_str,
+                browser=browser,
+                browser_version=browser_version,
+                platform=platform,
+                os=os_family,
+                ip_address=ip_address,
+                country=country
+            )
+            db.session.add(analytics)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     return redirect(url_entry.long, code=302)
 
