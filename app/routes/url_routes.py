@@ -28,13 +28,11 @@ url_bp = Blueprint("url", __name__)
 def get_country_from_ip(ip: str | None) -> str:
     ip = ip or ""
     try:
-        res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("country_name", "Unknown")
-    except Exception as e:
-        logging.error(f"GeoIP lookup failed: {e}")
-    return "Unknown"
+        resp = requests.get(f"https://ipwho.is/{ip}", timeout=3)
+        data = resp.json()
+        return data.get("country", {}).get("name", "Unknown")
+    except Exception:
+        return "Unknown"
 
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
