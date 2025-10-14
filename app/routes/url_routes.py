@@ -4,7 +4,8 @@ import string
 import uuid
 from urllib.parse import urlparse
 
-from flask import Blueprint, request, redirect
+from flask import Blueprint, logging, request, redirect
+import requests
 from user_agents import parse
 import qrcode
 from PIL import Image
@@ -24,6 +25,16 @@ from ..utils.static_urls import build_static_url
 
 url_bp = Blueprint("url", __name__)
 
+def get_country_from_ip(ip: str | None) -> str:
+    ip = ip or ""
+    try:
+        res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("country_name", "Unknown")
+    except Exception as e:
+        logging.error(f"GeoIP lookup failed: {e}")
+    return "Unknown"
 
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
@@ -136,14 +147,15 @@ def redirection(short_url):
     os_family = ua.os.family or "Unknown"
     os_version = ua.os.version_string or ""
     platform = f"{os_family} {os_version}".strip()
-
+   
     xff = request.headers.get('X-Forwarded-For', '')
     if xff:
         ip_address = xff.split(',')[0].strip()
     else:
         ip_address = request.remote_addr or "0.0.0.0"
 
-    country = "Unknown"
+    country = get_country_from_ip(ip_address) if ip_address else "Unknown"
+
 
     try:
         analytics = UrlAnalytics(
@@ -376,17 +388,19 @@ def edit_short_url(current_user):
         url = Urls.query.filter_by(short=old_short, user_id=current_user.id).first()
         if not url:
             return api_response(False, "Old short URL not found", None)
+        if url.qr_code!=None:
+            if url.qr_code and os.path.exists(url.qr_code):
+                try:
+                    os.remove(url.qr_code)
+                except Exception:
+                    pass
 
-        if url.qr_code and os.path.exists(url.qr_code):
-            try:
-                os.remove(url.qr_code)
-            except Exception:
-                pass
-
-        url.short = new_short
-        url.qr_code = _generate_qr_code(new_short)
-
-        db.session.commit()
+            url.short = new_short
+            url.qr_code = _generate_qr_code(new_short)
+            db.session.commit()
+        else:
+            url.short=new_short
+            db.session.commit()
 
         base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
         qr_url = build_static_url(url.qr_code)
