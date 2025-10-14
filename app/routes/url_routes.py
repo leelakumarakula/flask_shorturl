@@ -171,7 +171,7 @@ def redirection(short_url):
         return redirect(url_entry.long, code=302)
 
     # --- 🧮 Log real user analytics ---
-    if browser.lower() != "other" and os_family.lower() != "other":
+    if browser.lower() == "other" and os_family.lower() == "other":
            # Optionally log but don’t count analytics
         print(f"Skipped bot or preview visit: {user_agent_str} from {ip_address}")
         return redirect(url_entry.long, code=302)     
