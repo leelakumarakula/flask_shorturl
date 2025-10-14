@@ -139,6 +139,7 @@ def redirection(short_url):
     if not url_entry:
         return api_response(False, "URL does not exist", None)
 
+    # Parse user-agent
     user_agent_str = request.headers.get('User-Agent', "Unknown")
     ua = parse(user_agent_str)
 
@@ -147,7 +148,8 @@ def redirection(short_url):
     os_family = ua.os.family or "Unknown"
     os_version = ua.os.version_string or ""
     platform = f"{os_family} {os_version}".strip()
-   
+
+    # Get real client IP
     xff = request.headers.get('X-Forwarded-For', '')
     if xff:
         ip_address = xff.split(',')[0].strip()
@@ -156,25 +158,25 @@ def redirection(short_url):
 
     country = get_country_from_ip(ip_address) if ip_address else "Unknown"
 
-
-    try:
-        analytics = UrlAnalytics(
-            url_id=url_entry.id_,
-            user_agent=user_agent_str,
-            browser=browser,
-            browser_version=browser_version,
-            platform=platform,
-            os=os_family,
-            ip_address=ip_address,
-            country=country
-        )
-        db.session.add(analytics)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
+    # Skip analytics if browser or platform is "Other"
+    if browser.lower() != "other" and os_family.lower() != "other":
+        try:
+            analytics = UrlAnalytics(
+                url_id=url_entry.id_,
+                user_agent=user_agent_str,
+                browser=browser,
+                browser_version=browser_version,
+                platform=platform,
+                os=os_family,
+                ip_address=ip_address,
+                country=country
+            )
+            db.session.add(analytics)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     return redirect(url_entry.long, code=302)
-
 
 @url_bp.route('/analytics/<short_url>')
 @token_required
