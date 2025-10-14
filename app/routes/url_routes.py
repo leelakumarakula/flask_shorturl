@@ -149,10 +149,6 @@ def redirection(short_url):
     os_version = ua.os.version_string or ""
     platform = f"{os_family} {os_version}".strip()
 
-<<<<<<< HEAD
-    # Get real client IP
-=======
->>>>>>> db9e9642ded1d93fc374faf675c521ee5d776309
     xff = request.headers.get('X-Forwarded-For', '')
     if xff:
         ip_address = xff.split(',')[0].strip()
@@ -161,28 +157,6 @@ def redirection(short_url):
 
     country = get_country_from_ip(ip_address) if ip_address else "Unknown"
 
-<<<<<<< HEAD
-    # Skip analytics if browser or platform is "Other"
-    if browser.lower() != "other" and os_family.lower() != "other":
-        try:
-            analytics = UrlAnalytics(
-                url_id=url_entry.id_,
-                user_agent=user_agent_str,
-                browser=browser,
-                browser_version=browser_version,
-                platform=platform,
-                os=os_family,
-                ip_address=ip_address,
-                country=country
-            )
-            db.session.add(analytics)
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-    return redirect(url_entry.long, code=302)
-
-=======
     # --- 🛡️ BOT / PREVIEW FILTER SECTION ---
     bot_keywords = [
         "bot", "crawler", "spider", "preview", "fetch", "scan",
@@ -218,7 +192,6 @@ def redirection(short_url):
 
 
 
->>>>>>> db9e9642ded1d93fc374faf675c521ee5d776309
 @url_bp.route('/analytics/<short_url>')
 @token_required
 def get_analytics(current_user, short_url):
