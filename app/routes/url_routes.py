@@ -435,3 +435,40 @@ def edit_short_url(current_user):
         return api_response(False, str(e), None)
 
 
+@url_bp.route('/delete-account', methods=['DELETE'])
+@token_required
+def delete_account(current_user):
+    try:
+        # Step 1: Collect all URL IDs for this user
+        url_ids = [u.id_ for u in Urls.query.with_entities(Urls.id_).filter_by(user_id=current_user.id).all()]
+ 
+        if url_ids:
+            # Step 2: Bulk delete all analytics for these URLs
+            db.session.query(UrlAnalytics).filter(UrlAnalytics.url_id.in_(url_ids)).delete(synchronize_session=False)
+ 
+            # Step 3: Delete QR code files in one go
+            urls_with_qr = Urls.query.with_entities(Urls.qr_code).filter(Urls.id_.in_(url_ids)).all()
+            for qr in urls_with_qr:
+                if qr.qr_code and os.path.exists(qr.qr_code):
+                    try:
+                        os.remove(qr.qr_code)
+                    except Exception as e:
+                        current_app.logger.warning(f"QR deletion failed: {e}")
+ 
+            # Step 4: Bulk delete all URLs of this user
+            db.session.query(Urls).filter(Urls.id_.in_(url_ids)).delete(synchronize_session=False)
+ 
+        # Step 5: Delete the user record
+        db.session.delete(current_user)
+ 
+        # Step 6: Commit once at the end
+        db.session.commit()
+ 
+        return api_response(True, "Account and all related data deleted successfully.", None)
+ 
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Account deletion error: {e}")
+        return api_response(False, "Failed to delete account.", None)
+ 
+ 
