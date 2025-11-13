@@ -6,6 +6,8 @@ class Urls(db.Model):
     __tablename__ = "urls"
  
     id_ = db.Column("id_", db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=True)  # Optional custom title
+
     long = db.Column("long", db.String())
     short = db.Column("short", db.String(255), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
