@@ -248,13 +248,14 @@ def get_analytics(current_user, short_url):
         return api_response(False, "URL not found or not yours", None)
  
     clicks = UrlAnalytics.query.filter_by(url_id=url_entry.id_).order_by(UrlAnalytics.timestamp.desc()).all()
- 
+    
     qr_clicks = sum(1 for c in clicks if c.source == "qr")
     direct_clicks = sum(1 for c in clicks if c.source == "direct")
- 
+    
     return api_response(True, "Analytics fetched", {
         "short_url": url_entry.short,
         "long_url": url_entry.long,
+        "show_short": url_entry.show_short, 
         "created_at": url_entry.created_at.isoformat(),
         "total_clicks": len(clicks),
         "qr_clicks": qr_clicks,
