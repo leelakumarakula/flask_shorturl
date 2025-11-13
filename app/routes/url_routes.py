@@ -97,7 +97,19 @@ def _generate_qr_code(short_code: str) -> str:
     # Return a path relative to /static for URL building
     static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static")
     return static_rel.replace("\\", "/")
- 
+
+
+def absolute_qr_path(rel_path: str) -> str:
+    """
+    Convert a stored relative QR path (e.g. 'qrcodes/qr_123.png')
+    into an absolute filesystem path.
+    """
+    if not rel_path:
+        return None
+
+    base_static = current_app.static_folder or "static"
+    return os.path.join(base_static, rel_path.lstrip("/"))
+
  
 @url_bp.route('/create', methods=['POST'])
 @token_required
@@ -382,14 +394,25 @@ def delete_url(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or you don't have permission to delete", None)
-    if url_entry.qr_code and os.path.exists(url_entry.qr_code):
-        os.remove(url_entry.qr_code)
+
+    # ✔ Convert relative QR path to absolute
+    if url_entry.qr_code:
+        file_path = absolute_qr_path(url_entry.qr_code)
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                current_app.logger.warning(f"Failed to delete QR file: {e}")
+
+    # ✔ Delete analytics
     UrlAnalytics.query.filter_by(url_id=url_entry.id_).delete()
+
+    # ✔ Delete URL
     db.session.delete(url_entry)
     db.session.commit()
- 
+
     return api_response(True, f"Short URL '{short_url}' deleted successfully.", None)
- 
+
  
 @url_bp.route('/totalclicks', methods=['GET'])
 @token_required
@@ -443,54 +466,64 @@ def edit_short_url(current_user):
     from qrcode.image.styledpil import StyledPilImage
     from qrcode.image.styles.moduledrawers import (
         SquareModuleDrawer, GappedSquareModuleDrawer,
-        CircleModuleDrawer, RoundedModuleDrawer,
+        CircleModuleDrawer, RoundedModuleDrawer
     )
     from qrcode.image.styles.colormasks import SolidFillColorMask
     import io, base64, uuid, os
- 
+
     try:
         data = request.get_json()
         old_short = data.get("old_short")
         new_short = data.get("new_short")
- 
+
         if not old_short or not new_short:
             return api_response(False, "Missing fields", None)
+
         if not new_short.isalnum():
             return api_response(False, "Short code must be alphanumeric", None)
+
         if Urls.query.filter_by(short=new_short).first():
             return api_response(False, "Short URL already exists", None)
- 
+
         url = Urls.query.filter_by(short=old_short, user_id=current_user.id).first()
         if not url:
             return api_response(False, "Old short URL not found", None)
- 
+
         base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
- 
-        # ✅ CASE 1: Link had a QR — regenerate
+
+        # ---------------------------------------------------------
+        # CASE 1: URL HAS QR → REGENERATE QR + DELETE OLD QR FILE
+        # ---------------------------------------------------------
         if url.qr_code:
-            # Delete old QR
-            if os.path.exists(url.qr_code):
+
+            # ✔ Convert relative → absolute path
+            old_qr_path = absolute_qr_path(url.qr_code)
+
+            # ✔ Delete old QR
+            if old_qr_path and os.path.exists(old_qr_path):
                 try:
-                    os.remove(url.qr_code)
+                    os.remove(old_qr_path)
                 except Exception:
                     pass
- 
+
             qr_data = f"{base_url}/{new_short}?source=qr"
             qr_dir = os.path.join(current_app.static_folder or "static", "qrcodes")
             os.makedirs(qr_dir, exist_ok=True)
+
             qr_filename = f"qr_{uuid.uuid4().hex}.png"
             qr_path = os.path.join(qr_dir, qr_filename)
- 
-            # === Restore QR style/color ===
+
+            # === Restore QR style and colors ===
             color_dark = url.color_dark or "#000000"
             style = (url.style or "square").lower()
- 
+
             try:
                 fill_rgb = ImageColor.getrgb(color_dark)
             except Exception:
                 fill_rgb = (0, 0, 0)
+
             back_rgb = (255, 255, 255)
- 
+
             drawer_map = {
                 "square": SquareModuleDrawer(),
                 "dots": GappedSquareModuleDrawer(),
@@ -503,7 +536,7 @@ def edit_short_url(current_user):
             }
             drawer = drawer_map.get(style, SquareModuleDrawer())
             color_mask = SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
- 
+
             qr = qrcode.QRCode(
                 version=1,
                 error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -512,68 +545,67 @@ def edit_short_url(current_user):
             )
             qr.add_data(qr_data)
             qr.make(fit=True)
- 
+
             qr_img = qr.make_image(
                 image_factory=StyledPilImage,
                 module_drawer=drawer,
                 color_mask=color_mask
             ).convert("RGB")
- 
-            # ✅ Handle logo properly
+
+            # === Handle Logo ===
             try:
                 logo = None
- 
-                if url.logo:  # Custom logo uploaded by user
-                    logo_data = url.logo
-                    if "," in logo_data:
-                        logo_data = logo_data.split(",", 1)[1]
+
+                if url.logo:
+                    logo_data = url.logo.split(",", 1)[1] if "," in url.logo else url.logo
                     logo_bytes = base64.b64decode(logo_data)
                     logo = Image.open(io.BytesIO(logo_bytes))
- 
-                elif url.color_dark is None and url.style is None:
-                    # This means QR was generated via /create (default QR)
-                    default_logo_path = os.path.join("static", "image.png")
-                    if os.path.exists(default_logo_path):
-                        logo = Image.open(default_logo_path)
- 
-                # 🧠 Important: skip default logo if QR came from /generate-qr with no logo
+
+                default_logo_path = os.path.join("static", "image.png")
+                if not logo and os.path.exists(default_logo_path):
+                    logo = Image.open(default_logo_path)
+
                 if logo:
                     qr_width, qr_height = qr_img.size
                     logo_size = int(qr_width * 0.25)
                     logo = logo.resize((logo_size, logo_size))
                     pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
                     qr_img.paste(logo, pos)
- 
+
             except Exception as e:
                 current_app.logger.warning(f"Logo embedding failed during edit: {e}")
- 
-            # ✅ Save new QR
+
+            # ✔ Save new QR
             qr_img.save(qr_path)
             static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static").replace("\\", "/")
- 
-            # ✅ Update DB
+
+            # ✔ Update DB
             url.short = new_short
             url.qr_code = static_rel
+
             db.session.commit()
- 
+
             return api_response(True, "Short URL updated successfully (QR regenerated)", {
                 "newShortUrl": f"{base_url}/{new_short}",
                 "newQrCode": build_static_url(static_rel)
             })
- 
-        # ✅ CASE 2: Link never had a QR — just update short code
+
+        # ---------------------------------------------------------
+        # CASE 2: URL DID NOT HAVE QR → JUST UPDATE SHORT CODE
+        # ---------------------------------------------------------
         else:
             url.short = new_short
             db.session.commit()
+
             return api_response(True, "Short URL updated successfully (no QR generated)", {
                 "newShortUrl": f"{base_url}/{new_short}"
             })
- 
+
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Edit short URL error: {e}")
         return api_response(False, str(e), None)
- 
+
  
  
  
