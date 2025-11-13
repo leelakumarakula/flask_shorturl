@@ -112,6 +112,8 @@ def create(current_user):
     long_url = data.get("long_url", "").strip()
     custom_short = data.get("custom", "").strip()
     generate_qr = data.get("generate_qr", False)
+    title = (data.get("title") or "").strip()
+
  
     if not long_url:
         return api_response(False, "long_url is required", None)
@@ -144,12 +146,15 @@ def create(current_user):
         short=short_code,
         user_id=current_user.id,
         qr_code=qr_path,
+        title=title   # ✅ added here
+
     )
     db.session.add(new_url)
     db.session.commit()
  
     # ✅ Build response
     response_data = {
+        "title": title,
         "long_url": long_url,
         "short_url": short_full,
         "created_at": new_url.created_at.isoformat(),
@@ -244,6 +249,7 @@ def get_analytics(current_user, short_url):
         "direct_clicks": direct_clicks,
         "clicks": [
             {
+                "title": url_entry.title, 
                 "timestamp": c.timestamp.isoformat(),
                 "ip_address": c.ip_address,
                 "browser": c.browser,
@@ -347,6 +353,7 @@ def my_urls(current_user):
         "user_id": current_user.id,
         "urls": [
             {
+                "title": u.title, 
                 "shorturl": f"{base_url}/{u.short}" if u.short else None,
                 "shortcode": u.short,
                 "long": u.long,
@@ -421,6 +428,7 @@ def get_url_details(current_user, short_url):
         return api_response(False, "URL not found", None)
  
     return api_response(True, "URL details", {
+        "title": url_entry.title,
         "short_url": url_entry.short,
         "long_url": url_entry.long,
         "qr_code": url_entry.qr_code,
@@ -634,6 +642,8 @@ def generate_qr(current_user):
     style = (data.get("style") or "square").strip().lower()
     custom_short = (data.get("custom") or "").strip()
     logo_data = data.get("logo")
+    title = (data.get("title") or "").strip()
+
  
     if not long_url:
         return api_response(False, "long_url is required", None)
@@ -725,14 +735,16 @@ def generate_qr(current_user):
     show_short=show_short,
     color_dark=color_dark,
     style=style,
-    logo=logo_data
-)
+    logo=logo_data,
+    title=title 
+    )
  
     db.session.add(new_url)
     db.session.commit()
  
     # === Build response ===
     response_data = {
+        "title": title,
         "long_url": long_url,
         "qr_code": build_static_url(static_rel),
         "created_at": new_url.created_at.isoformat(),
