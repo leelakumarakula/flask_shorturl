@@ -366,17 +366,19 @@ def my_urls(current_user):
         "user_id": current_user.id,
         "urls": [
             {
-                "title": u.title, 
+                "title": u.title,
                 "shorturl": f"{base_url}/{u.short}" if u.short else None,
                 "shortcode": u.short,
                 "long": u.long,
                 "created_at": u.created_at.isoformat(),
                 "qr_code": build_static_url(u.qr_code),
-                "show_short": u.show_short,  # 👈 added
+                "show_short": u.show_short,
+                "hits": UrlAnalytics.query.filter_by(url_id=u.id_).count()  # ✅ ADD THIS
             }
             for u in urls
         ],
     })
+
  
  
 @url_bp.route('/urlcount', methods=['GET'])
@@ -418,31 +420,55 @@ def delete_url(current_user, short_url):
 @url_bp.route('/totalclicks', methods=['GET'])
 @token_required
 def dashboard_stats(current_user):
-    total_links = Urls.query.filter_by(user_id=current_user.id).count()
-    user_urls = Urls.query.filter_by(user_id=current_user.id).all()
-    url_ids = [u.id_ for u in user_urls]
- 
+    urls = Urls.query.filter_by(user_id=current_user.id).all()
+    url_ids = [u.id_ for u in urls]
+
+    # existing logic — do not remove
+    total_links = len(urls)
+
     if not url_ids:
         total_clicks = 0
-        from datetime import date as _date
         clicks_today = 0
     else:
-        total_clicks = UrlAnalytics.query.filter(UrlAnalytics.url_id.in_(url_ids)).count()
- 
-        from datetime import date as _date
-        today = _date.today()
+        total_clicks = UrlAnalytics.query.filter(
+            UrlAnalytics.url_id.in_(url_ids)
+        ).count()
+
+        today = datetime.date.today()
         clicks_today = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids),
             cast(UrlAnalytics.timestamp, Date) == today
         ).count()
- 
+
+    # -----------------------------
+    # NEW FIELDS (requested by you)
+    # -----------------------------
+    # Total short links (created through shortener or QR with show_short=True)
+    total_short_links = Urls.query.filter_by(
+        user_id=current_user.id,
+        show_short=True
+    ).count()
+
+    # Total QRs (any URL that has qr_code stored)
+    total_qrs = Urls.query.filter(
+        Urls.user_id == current_user.id,
+        Urls.qr_code.isnot(None)
+    ).count()
+
+    # -----------------------------
+    # Return existing fields + new
+    # -----------------------------
     return api_response(True, "Dashboard stats", {
         "user_id": current_user.id,
-        "total_links": total_links,
-        "total_clicks": total_clicks,
-        "clicks_today": clicks_today
+        "total_links": total_links,      # already present
+        "total_clicks": total_clicks,    # already present
+        "clicks_today": clicks_today,    # already present
+
+        # NEW FIELDS
+        "total_qrs": total_qrs,
+        "total_short_links": total_short_links
     })
- 
+
  
 @url_bp.route('/url/<short_url>', methods=['GET'])
 @token_required
