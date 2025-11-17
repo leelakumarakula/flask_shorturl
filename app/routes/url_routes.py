@@ -26,27 +26,49 @@ from ..utils.static_urls import build_static_url
  
 url_bp = Blueprint("url", __name__)
  
+# def get_location_from_ip(ip: str | None) -> dict:
+#     """
+#     Fetch country, region (state), and city (district) from IP address.
+#     Returns 'Unknown' if lookup fails.
+#     """
+#     ip = ip or ""
+#     try:
+#         res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
+#         if res.status_code == 200:
+#             data = res.json()
+#             return {
+#                 "country": data.get("country_name", "Unknown"),
+#                 "region": data.get("region", "Unknown"),  # State / Province
+#                 "city": data.get("city", "Unknown"),      # District / City
+#             }
+#     except Exception as e:
+#         logging.error(f"GeoIP lookup failed: {e}")
+ 
+#     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
+ 
+
+
 def get_location_from_ip(ip: str | None) -> dict:
-    """
-    Fetch country, region (state), and city (district) from IP address.
-    Returns 'Unknown' if lookup fails.
-    """
     ip = ip or ""
     try:
-        res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
-        if res.status_code == 200:
-            data = res.json()
+        resp = requests.get(f"https://ipwho.is/{ip}", timeout=3)
+        data = resp.json()
+
+        if data.get("success"):
             return {
-                "country": data.get("country_name", "Unknown"),
-                "region": data.get("region", "Unknown"),  # State / Province
-                "city": data.get("city", "Unknown"),      # District / City
+                "country": data.get("country", "Unknown"),
+                "region": data.get("region", "Unknown"),
+                "city": data.get("city", "Unknown"),
             }
-    except Exception as e:
-        logging.error(f"GeoIP lookup failed: {e}")
- 
+    except Exception:
+        pass
+
     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
- 
- 
+
+
+
+
+
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
     while True:
