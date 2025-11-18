@@ -10,7 +10,12 @@ import requests
 from user_agents import parse
 import qrcode
 from PIL import Image
- 
+import pytz
+from datetime import datetime, date
+from sqlalchemy import cast, Date
+
+
+
 from ..extensions import db
 from flask import current_app
 from ..models.url import Urls
@@ -456,10 +461,11 @@ def dashboard_stats(current_user):
             UrlAnalytics.url_id.in_(url_ids)
         ).count()
 
-        today = datetime.date.today()
+        ist = pytz.timezone("Asia/Kolkata")
+        ist_today = datetime.now(ist).date()
         clicks_today = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids),
-            cast(UrlAnalytics.timestamp, Date) == today
+            cast(UrlAnalytics.timestamp, Date) == ist_today
         ).count()
 
     # -----------------------------

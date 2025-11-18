@@ -1,6 +1,9 @@
-import datetime
 from ..extensions import db
+from datetime import datetime
+import pytz
 
+# Use IST timezone safely
+ist = pytz.timezone("Asia/Kolkata")
 
 class User(db.Model):
     __tablename__ = "users"
@@ -16,6 +19,6 @@ class User(db.Model):
     client_id = db.Column(db.String(100), unique=True)
     client_secret = db.Column(db.String(200))
 
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(ist))
 
 
