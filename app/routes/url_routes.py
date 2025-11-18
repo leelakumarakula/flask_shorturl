@@ -416,16 +416,18 @@ def delete_url(current_user, short_url):
 
     return api_response(True, f"Short URL '{short_url}' deleted successfully.", None)
 
+import datetime
+import pytz
+from sqlalchemy import and_
  
 @url_bp.route('/totalclicks', methods=['GET'])
 @token_required
 def dashboard_stats(current_user):
     urls = Urls.query.filter_by(user_id=current_user.id).all()
     url_ids = [u.id_ for u in urls]
-
-    # existing logic — do not remove
+ 
     total_links = len(urls)
-
+ 
     if not url_ids:
         total_clicks = 0
         clicks_today = 0
@@ -433,41 +435,50 @@ def dashboard_stats(current_user):
         total_clicks = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids)
         ).count()
-
-        today = datetime.date.today()
+ 
+        # -----------------------------
+        # FIX: IST TIME RANGE FOR TODAY
+        # -----------------------------
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.datetime.now(ist)
+ 
+        # today's date in IST
+        today_ist = now_ist.date()
+ 
+        # start and end of the IST day (converted to UTC for querying DB)
+        start_ist = ist.localize(datetime.datetime(today_ist.year, today_ist.month, today_ist.day, 0, 0, 0))
+        end_ist = start_ist + datetime.timedelta(days=1)
+ 
+        start_utc = start_ist.astimezone(pytz.utc)
+        end_utc = end_ist.astimezone(pytz.utc)
+ 
+        # Query UTC timestamps using the calculated range
         clicks_today = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids),
-            cast(UrlAnalytics.timestamp, Date) == today
+            UrlAnalytics.timestamp >= start_utc,
+            UrlAnalytics.timestamp < end_utc
         ).count()
-
-    # -----------------------------
-    # NEW FIELDS (requested by you)
-    # -----------------------------
-    # Total short links (created through shortener or QR with show_short=True)
+ 
+    # your new fields (unchanged)
     total_short_links = Urls.query.filter_by(
         user_id=current_user.id,
         show_short=True
     ).count()
-
-    # Total QRs (any URL that has qr_code stored)
+ 
     total_qrs = Urls.query.filter(
         Urls.user_id == current_user.id,
         Urls.qr_code.isnot(None)
     ).count()
-
-    # -----------------------------
-    # Return existing fields + new
-    # -----------------------------
+ 
     return api_response(True, "Dashboard stats", {
         "user_id": current_user.id,
-        "total_links": total_links,      # already present
-        "total_clicks": total_clicks,    # already present
-        "clicks_today": clicks_today,    # already present
-
-        # NEW FIELDS
+        "total_links": total_links,
+        "total_clicks": total_clicks,
+        "clicks_today": clicks_today,
         "total_qrs": total_qrs,
         "total_short_links": total_short_links
     })
+ 
 
  
 @url_bp.route('/url/<short_url>', methods=['GET'])
