@@ -10,12 +10,7 @@ import requests
 from user_agents import parse
 import qrcode
 from PIL import Image
-import pytz
-from datetime import datetime, date
-from sqlalchemy import cast, Date
-
-
-
+ 
 from ..extensions import db
 from flask import current_app
 from ..models.url import Urls
@@ -31,49 +26,27 @@ from ..utils.static_urls import build_static_url
  
 url_bp = Blueprint("url", __name__)
  
-# def get_location_from_ip(ip: str | None) -> dict:
-#     """
-#     Fetch country, region (state), and city (district) from IP address.
-#     Returns 'Unknown' if lookup fails.
-#     """
-#     ip = ip or ""
-#     try:
-#         res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
-#         if res.status_code == 200:
-#             data = res.json()
-#             return {
-#                 "country": data.get("country_name", "Unknown"),
-#                 "region": data.get("region", "Unknown"),  # State / Province
-#                 "city": data.get("city", "Unknown"),      # District / City
-#             }
-#     except Exception as e:
-#         logging.error(f"GeoIP lookup failed: {e}")
- 
-#     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
- 
-
-
 def get_location_from_ip(ip: str | None) -> dict:
+    """
+    Fetch country, region (state), and city (district) from IP address.
+    Returns 'Unknown' if lookup fails.
+    """
     ip = ip or ""
     try:
-        resp = requests.get(f"https://ipwho.is/{ip}", timeout=3)
-        data = resp.json()
-
-        if data.get("success"):
+        res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
+        if res.status_code == 200:
+            data = res.json()
             return {
-                "country": data.get("country", "Unknown"),
-                "region": data.get("region", "Unknown"),
-                "city": data.get("city", "Unknown"),
+                "country": data.get("country_name", "Unknown"),
+                "region": data.get("region", "Unknown"),  # State / Province
+                "city": data.get("city", "Unknown"),      # District / City
             }
-    except Exception:
-        pass
-
+    except Exception as e:
+        logging.error(f"GeoIP lookup failed: {e}")
+ 
     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
-
-
-
-
-
+ 
+ 
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
     while True:
@@ -461,11 +434,10 @@ def dashboard_stats(current_user):
             UrlAnalytics.url_id.in_(url_ids)
         ).count()
 
-        ist = pytz.timezone("Asia/Kolkata")
-        ist_today = datetime.now(ist).date()
+        today = datetime.date.today()
         clicks_today = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids),
-            cast(UrlAnalytics.timestamp, Date) == ist_today
+            cast(UrlAnalytics.timestamp, Date) == today
         ).count()
 
     # -----------------------------
