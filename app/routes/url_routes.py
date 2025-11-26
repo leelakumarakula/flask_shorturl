@@ -6,12 +6,15 @@ import datetime
 from urllib.parse import urlparse
  
 from flask import Blueprint, logging, request, redirect
+import json
 import requests
 from user_agents import parse
 import qrcode
 from PIL import Image
+# from app.extensions import db, redis_client
+from .. import extensions    
  
-from ..extensions import db
+from ..extensions import db, redis_client
 from flask import current_app
 from ..models.url import Urls
 from ..models.url_analytics import UrlAnalytics
@@ -34,15 +37,16 @@ def get_location_from_ip(ip: str | None) -> dict:
         if data.get("success"):
             return {
                 "country": data.get("country", "Unknown"),
+
                 "region": data.get("region", "Unknown"),
+
                 "city": data.get("city", "Unknown"),
             }
     except Exception:
         pass
+
     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
- 
- 
- 
+
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
     while True:
@@ -93,8 +97,8 @@ def _generate_qr_code(short_code: str) -> str:
     # Return a path relative to /static for URL building
     static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static")
     return static_rel.replace("\\", "/")
-
-
+ 
+ 
 def absolute_qr_path(rel_path: str) -> str:
     """
     Convert a stored relative QR path (e.g. 'qrcodes/qr_123.png')
@@ -102,86 +106,127 @@ def absolute_qr_path(rel_path: str) -> str:
     """
     if not rel_path:
         return None
-
+ 
     base_static = current_app.static_folder or "static"
     return os.path.join(base_static, rel_path.lstrip("/"))
-
+ 
  
 @url_bp.route('/create', methods=['POST'])
 @token_required
 def create(current_user):
-    """
-    Always generate a short link for analytics.
-    If the user provides a custom short code, use it (if available).
-    Optionally generate a QR code if requested.
-    """
     data = request.get_json() or {}
- 
-    long_url = data.get("long_url", "").strip()
-    custom_short = data.get("custom", "").strip()
-    generate_qr = data.get("generate_qr", False)
+
+    long_url = (data.get("long_url") or "").strip()
+    custom_short = (data.get("custom") or "").strip()
+    generate_qr = bool(data.get("generate_qr", False))
     title = (data.get("title") or "").strip()
 
- 
     if not long_url:
         return api_response(False, "long_url is required", None)
- 
-    # ✅ Ensure valid URL format
+
     parsed = urlparse(long_url)
     if not parsed.scheme:
         long_url = "https://" + long_url
- 
-    # ✅ Handle short code logic
+
+    # Short code logic
     if custom_short:
         if not custom_short.isalnum():
             return api_response(False, "Custom short URL must be alphanumeric.", None)
-        existing = Urls.query.filter_by(short=custom_short).first()
-        if existing:
-            return api_response(False, "This custom short URL is already taken.", None)
+        if Urls.query.filter_by(short=custom_short).first():
+            return api_response(False, "This custom short URL already exists.", None)
         short_code = custom_short
     else:
         short_code = _shorten_url()
- 
-    base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
+
+    base_url = current_app.config.get("BASE_URL")
     short_full = f"{base_url}/{short_code}"
- 
-    # ✅ Optionally generate QR for the short link
+
+    # Optional QR code generation
     qr_path = _generate_qr_code(short_code) if generate_qr else None
- 
-    # ✅ Store in DB for analytics
+
+    # Save to DB only
     new_url = Urls(
         long=long_url,
         short=short_code,
         user_id=current_user.id,
         qr_code=qr_path,
-        title=title   # ✅ added here
-
+        title=title
     )
     db.session.add(new_url)
     db.session.commit()
- 
-    # ✅ Build response
-    response_data = {
+
+    # ❌ No Redis write here
+
+    result = {
         "title": title,
         "long_url": long_url,
         "short_url": short_full,
-        "created_at": new_url.created_at.isoformat(),
+        "created_at": new_url.created_at.isoformat()
     }
- 
+
     if qr_path:
-        response_data["qr_code"] = build_static_url(qr_path)
+        result["qr_code"] = build_static_url(qr_path)
+
+    return api_response(True, "Short URL created successfully.", result)
+
  
-    return api_response(True, "Short URL created successfully.", response_data)
  
  
  
 @url_bp.route('/<short_url>')
 def redirection(short_url):
-    url_entry = Urls.query.filter_by(short=short_url).first()
-    if not url_entry:
-        return api_response(False, "URL does not exist", None)
+    # -------------------------------------
+    # 1) Try Redis first
+    # -------------------------------------
+    cached = None
+    long_url = None
+    url_id = None
+    url_entry = None
  
-    user_agent_str = request.headers.get('User-Agent', "Unknown")
+    try:
+        if extensions.redis_client:
+            cached = extensions.redis_client.get(f"short:{short_url}")
+            print(">>> Redis GET:", cached)
+    except:
+        cached = None
+ 
+    if cached:
+        # Redis HIT
+        try:
+            payload = json.loads(cached)
+            long_url = payload.get("long")
+            url_id = payload.get("id")          # using id_
+        except:
+            # If JSON failed, assume raw string
+            long_url = cached
+            url_id = None
+ 
+    else:
+        # Redis MISS → fallback to DB
+        url_entry = Urls.query.filter_by(short=short_url).first()
+        if not url_entry:
+            return api_response(False, "URL does not exist", None)
+ 
+        long_url = url_entry.long
+        url_id = url_entry.id_                 # using id_
+ 
+        # Store in Redis (best effort)
+        try:
+            ttl = int(current_app.config.get("REDIS_TTL", 3600))
+            if extensions.redis_client:
+                extensions.redis_client.setex(
+                    f"short:{short_url}",
+                    ttl,
+                    json.dumps({"long": long_url, "id": url_id})
+                )
+                print(">>> Redis SET short:" + short_url)
+        except:
+            pass
+ 
+    # -------------------------------------
+    # 2) Parse User-Agent (browser/OS)
+    # -------------------------------------
+    user_agent_str = request.headers.get("User-Agent", "Unknown")
     ua = parse(user_agent_str)
  
     browser = ua.browser.family or "Unknown"
@@ -190,49 +235,67 @@ def redirection(short_url):
     os_version = ua.os.version_string or ""
     platform = f"{os_family} {os_version}".strip()
  
-    xff = request.headers.get('X-Forwarded-For', '')
+    # -------------------------------------
+    # 3) Find IP & Location
+    # -------------------------------------
+    xff = request.headers.get("X-Forwarded-For", '')
     ip_address = xff.split(',')[0].strip() if xff else request.remote_addr or "0.0.0.0"
-    location = get_location_from_ip(ip_address) if ip_address else {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
-    country = location["country"]
-    region = location["region"]
-    city = location["city"]
  
+    location = get_location_from_ip(ip_address)
+    country = location.get("country")
+    region = location.get("region")
+    city = location.get("city")
  
-    # detect source
+    # -------------------------------------
+    # 4) Source tracking
+    # -------------------------------------
     source = request.args.get("source", "direct")
  
-    # Skip bots
+    # -------------------------------------
+    # 5) Skip bot requests
+    # -------------------------------------
     bot_keywords = [
         "bot", "crawler", "spider", "preview", "fetch", "scan",
-        "SafeLinks", "Teams", "Outlook", "Skype", "Microsoft Office",
-        "LinkExpander", "Slackbot", "Discordbot", "WhatsApp", "Facebook",
-        "Twitterbot", "Google-Read-Aloud"
+        "safelinks", "teams", "outlook", "skype", "microsoft office",
+        "linkexpander", "slackbot", "discordbot", "whatsapp", "facebook",
+        "twitterbot", "google-read-aloud"
     ]
-    if any(b.lower() in user_agent_str.lower() for b in bot_keywords):
-        print(f"Skipped bot: {user_agent_str}")
-        return redirect(url_entry.long, code=302)
  
+    if any(b in user_agent_str.lower() for b in bot_keywords):
+        print(f">>> BOT skipped: {user_agent_str}")
+        return redirect(long_url, code=302)
+ 
+    # -------------------------------------
+    # 6) Save analytics (only valid traffic)
+    # -------------------------------------
     try:
-        analytics = UrlAnalytics(
-            url_id=url_entry.id_,
-            user_agent=user_agent_str,
-            browser=browser,
-            browser_version=browser_version,
-            platform=platform,
-            os=os_family,
-            ip_address=ip_address,
-            country=country,
-            region=region,  
-            city=city,    
-            source=source,  # ✅ log QR vs direct
-        )
-        db.session.add(analytics)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
+        if url_id is not None:
+            analytics = UrlAnalytics(
+                url_id=url_id,
+                user_agent=user_agent_str,
+                browser=browser,
+                browser_version=browser_version,
+                platform=platform,
+                os=os_family,
+                ip_address=ip_address,
+                country=country,
+                region=region,
+                city=city,
+                source=source
+            )
+            db.session.add(analytics)
+            db.session.commit()
+    except Exception as e:
+        print(">>> Analytics error:", e)
+        try:
+            db.session.rollback()
+        except:
+            pass
  
-    return redirect(url_entry.long, code=302)
- 
+    # -------------------------------------
+    # 7) Redirect to the long URL
+    # -------------------------------------
+    return redirect(long_url, code=302)
  
  
  
@@ -244,21 +307,21 @@ def get_analytics(current_user, short_url):
         return api_response(False, "URL not found or not yours", None)
  
     clicks = UrlAnalytics.query.filter_by(url_id=url_entry.id_).order_by(UrlAnalytics.timestamp.desc()).all()
-    
+   
     qr_clicks = sum(1 for c in clicks if c.source == "qr")
     direct_clicks = sum(1 for c in clicks if c.source == "direct")
-    
+   
     return api_response(True, "Analytics fetched", {
         "short_url": url_entry.short,
         "long_url": url_entry.long,
-        "show_short": url_entry.show_short, 
+        "show_short": url_entry.show_short,
         "created_at": url_entry.created_at.isoformat(),
         "total_clicks": len(clicks),
         "qr_clicks": qr_clicks,
         "direct_clicks": direct_clicks,
         "clicks": [
             {
-                "title": url_entry.title, 
+                "title": url_entry.title,
                 "timestamp": c.timestamp.isoformat(),
                 "ip_address": c.ip_address,
                 "browser": c.browser,
@@ -374,7 +437,7 @@ def my_urls(current_user):
             for u in urls
         ],
     })
-
+ 
  
  
 @url_bp.route('/urlcount', methods=['GET'])
@@ -393,7 +456,7 @@ def delete_url(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or you don't have permission to delete", None)
-
+ 
     # ✔ Convert relative QR path to absolute
     if url_entry.qr_code:
         file_path = absolute_qr_path(url_entry.qr_code)
@@ -402,16 +465,23 @@ def delete_url(current_user, short_url):
                 os.remove(file_path)
             except Exception as e:
                 current_app.logger.warning(f"Failed to delete QR file: {e}")
-
+ 
     # ✔ Delete analytics
     UrlAnalytics.query.filter_by(url_id=url_entry.id_).delete()
-
+ 
     # ✔ Delete URL
     db.session.delete(url_entry)
     db.session.commit()
-
+ 
+    # Remove from Redis cache (best-effort)
+    try:
+        if extensions.redis_client:
+            extensions.redis_client.delete(f"short:{short_url}")
+    except Exception:
+        pass
+ 
     return api_response(True, f"Short URL '{short_url}' deleted successfully.", None)
-
+ 
 import datetime
 import pytz
 from sqlalchemy import and_
@@ -475,7 +545,7 @@ def dashboard_stats(current_user):
         "total_short_links": total_short_links
     })
  
-
+ 
  
 @url_bp.route('/url/<short_url>', methods=['GET'])
 @token_required
@@ -523,21 +593,15 @@ def edit_short_url(current_user):
         if not url:
             return api_response(False, "Old short URL not found", None)
 
-        base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
+        base_url = current_app.config.get("BASE_URL")
 
-        # ---------------------------------------------------------
-        # CASE 1: URL HAS QR → REGENERATE QR + DELETE OLD QR FILE
-        # ---------------------------------------------------------
+        # CASE 1: URL HAS QR → regenerate
         if url.qr_code:
-
-            # ✔ Convert relative → absolute path
             old_qr_path = absolute_qr_path(url.qr_code)
-
-            # ✔ Delete old QR
             if old_qr_path and os.path.exists(old_qr_path):
                 try:
                     os.remove(old_qr_path)
-                except Exception:
+                except:
                     pass
 
             qr_data = f"{base_url}/{new_short}?source=qr"
@@ -547,13 +611,13 @@ def edit_short_url(current_user):
             qr_filename = f"qr_{uuid.uuid4().hex}.png"
             qr_path = os.path.join(qr_dir, qr_filename)
 
-            # === Restore QR style and colors ===
+            # Restore style/colors
             color_dark = url.color_dark or "#000000"
             style = (url.style or "square").lower()
 
             try:
                 fill_rgb = ImageColor.getrgb(color_dark)
-            except Exception:
+            except:
                 fill_rgb = (0, 0, 0)
 
             back_rgb = (255, 255, 255)
@@ -563,13 +627,8 @@ def edit_short_url(current_user):
                 "dots": GappedSquareModuleDrawer(),
                 "circle": CircleModuleDrawer(),
                 "rounded": RoundedModuleDrawer(),
-                "vertical-bars": GappedSquareModuleDrawer(),
-                "horizontal-bars": GappedSquareModuleDrawer(),
-                "mosaic": CircleModuleDrawer(),
-                "beads": RoundedModuleDrawer(),
             }
             drawer = drawer_map.get(style, SquareModuleDrawer())
-            color_mask = SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
 
             qr = qrcode.QRCode(
                 version=1,
@@ -583,13 +642,14 @@ def edit_short_url(current_user):
             qr_img = qr.make_image(
                 image_factory=StyledPilImage,
                 module_drawer=drawer,
-                color_mask=color_mask
+                color_mask=SolidFillColorMask(
+                    back_color=back_rgb, front_color=fill_rgb
+                )
             ).convert("RGB")
 
-            # === Handle Logo ===
+            # Handle logo
             try:
                 logo = None
-
                 if url.logo:
                     logo_data = url.logo.split(",", 1)[1] if "," in url.logo else url.logo
                     logo_bytes = base64.b64decode(logo_data)
@@ -600,46 +660,57 @@ def edit_short_url(current_user):
                     logo = Image.open(default_logo_path)
 
                 if logo:
-                    qr_width, qr_height = qr_img.size
-                    logo_size = int(qr_width * 0.25)
-                    logo = logo.resize((logo_size, logo_size))
-                    pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
+                    qr_w, qr_h = qr_img.size
+                    size = int(qr_w * 0.25)
+                    logo = logo.resize((size, size))
+                    pos = ((qr_w - size) // 2, (qr_h - size) // 2)
                     qr_img.paste(logo, pos)
 
             except Exception as e:
-                current_app.logger.warning(f"Logo embedding failed during edit: {e}")
+                current_app.logger.warning(f"Logo embed error: {e}")
 
-            # ✔ Save new QR
             qr_img.save(qr_path)
             static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static").replace("\\", "/")
 
-            # ✔ Update DB
+            # Update DB
             url.short = new_short
             url.qr_code = static_rel
-
             db.session.commit()
 
-            return api_response(True, "Short URL updated successfully (QR regenerated)", {
+            # NEW ✔ Delete old key from Redis
+            try:
+                if extensions.redis_client:
+                    extensions.redis_client.delete(f"short:{old_short}")
+            except:
+                pass
+
+            return api_response(True, "Short URL updated (QR regenerated)", {
                 "newShortUrl": f"{base_url}/{new_short}",
                 "newQrCode": build_static_url(static_rel)
             })
 
-        # ---------------------------------------------------------
-        # CASE 2: URL DID NOT HAVE QR → JUST UPDATE SHORT CODE
-        # ---------------------------------------------------------
+        # CASE 2: No QR → simple update
         else:
             url.short = new_short
             db.session.commit()
 
-            return api_response(True, "Short URL updated successfully (no QR generated)", {
+            # NEW ✔ Delete old key from Redis
+            try:
+                if extensions.redis_client:
+                    extensions.redis_client.delete(f"short:{old_short}")
+            except:
+                pass
+
+            return api_response(True, "Short URL updated successfully", {
                 "newShortUrl": f"{base_url}/{new_short}"
             })
 
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Edit short URL error: {e}")
         return api_response(False, str(e), None)
 
+
+ 
  
  
  
@@ -647,29 +718,55 @@ def edit_short_url(current_user):
 @token_required
 def delete_account(current_user):
     try:
-        # Step 1: Collect all URL IDs for this user
-        url_ids = [u.id_ for u in Urls.query.with_entities(Urls.id_).filter_by(user_id=current_user.id).all()]
+        # ----------------------------------------------
+        # 1. Collect all user's URLs
+        # ----------------------------------------------
+        urls = Urls.query.filter_by(user_id=current_user.id).all()
+        url_ids = [u.id_ for u in urls]
+        short_codes = [u.short for u in urls]
  
+        # ----------------------------------------------
+        # 2. Delete analytics records
+        # ----------------------------------------------
         if url_ids:
-            # Step 2: Bulk delete all analytics for these URLs
-            db.session.query(UrlAnalytics).filter(UrlAnalytics.url_id.in_(url_ids)).delete(synchronize_session=False)
+            UrlAnalytics.query.filter(
+                UrlAnalytics.url_id.in_(url_ids)
+            ).delete(synchronize_session=False)
  
-            # Step 3: Delete QR code files in one go
-            urls_with_qr = Urls.query.with_entities(Urls.qr_code).filter(Urls.id_.in_(url_ids)).all()
-            for qr in urls_with_qr:
-                if qr.qr_code and os.path.exists(qr.qr_code):
+        # ----------------------------------------------
+        # 3. Delete QR image files
+        # ----------------------------------------------
+        for u in urls:
+            if u.qr_code:
+                path = absolute_qr_path(u.qr_code)
+                if path and os.path.exists(path):
                     try:
-                        os.remove(qr.qr_code)
+                        os.remove(path)
                     except Exception as e:
                         current_app.logger.warning(f"QR deletion failed: {e}")
  
-            # Step 4: Bulk delete all URLs of this user
-            db.session.query(Urls).filter(Urls.id_.in_(url_ids)).delete(synchronize_session=False)
+        # ----------------------------------------------
+        # 4. Delete Redis keys
+        # ----------------------------------------------
+        try:
+            if extensions.redis_client:
+                for s in short_codes:
+                    extensions.redis_client.delete(f"short:{s}")
+        except Exception as e:
+            current_app.logger.warning(f"Redis cleanup failed: {e}")
  
-        # Step 5: Delete the user record
+        # ----------------------------------------------
+        # 5. Delete URL records
+        # ----------------------------------------------
+        if url_ids:
+            Urls.query.filter(
+                Urls.id_.in_(url_ids)
+            ).delete(synchronize_session=False)
+ 
+        # ----------------------------------------------
+        # 6. Delete the user
+        # ----------------------------------------------
         db.session.delete(current_user)
- 
-        # Step 6: Commit once at the end
         db.session.commit()
  
         return api_response(True, "Account and all related data deleted successfully.", None)
@@ -678,74 +775,66 @@ def delete_account(current_user):
         db.session.rollback()
         current_app.logger.error(f"Account deletion error: {e}")
         return api_response(False, "Failed to delete account.", None)
-   
-   
 @url_bp.route('/generate-qr', methods=['POST'])
 @token_required
 def generate_qr(current_user):
-    """
-    Generate a QR Code (Bitly-style)
-    ✅ Always generates a short URL for analytics tracking.
-    ✅ If user selects only QR, the short link is hidden (show_short=False).
-    ✅ QR encodes the short URL internally for accurate analytics.
-    """
     import qrcode
     from PIL import Image, ImageColor
     from qrcode.image.styledpil import StyledPilImage
     from qrcode.image.styles.moduledrawers import (
         SquareModuleDrawer, GappedSquareModuleDrawer,
-        CircleModuleDrawer, RoundedModuleDrawer,
+        CircleModuleDrawer, RoundedModuleDrawer
     )
     from qrcode.image.styles.colormasks import SolidFillColorMask
+    import uuid, os, io, base64, json
     from urllib.parse import urlparse
-    import uuid, os, base64, io
- 
+
     data = request.get_json(silent=True) or {}
- 
+
     long_url = (data.get("long_url") or "").strip()
-    show_short = bool(data.get("generate_short", False))  # user decides visibility
+    show_short = bool(data.get("generate_short", False))
     color_dark = (data.get("color_dark") or "#000000").strip()
     style = (data.get("style") or "square").strip().lower()
     custom_short = (data.get("custom") or "").strip()
     logo_data = data.get("logo")
     title = (data.get("title") or "").strip()
 
- 
     if not long_url:
         return api_response(False, "long_url is required", None)
- 
+
     parsed = urlparse(long_url)
     if not parsed.scheme:
         long_url = "https://" + long_url
- 
-    base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
- 
-    # === Handle short code logic ===
+
+    base_url = current_app.config.get("BASE_URL")
+
+    # Short code logic
     if custom_short:
         if not custom_short.isalnum():
             return api_response(False, "Custom short URL must be alphanumeric.", None)
-        existing = Urls.query.filter_by(short=custom_short).first()
-        if existing:
+        if Urls.query.filter_by(short=custom_short).first():
             return api_response(False, "This custom short URL is already taken.", None)
         short_code = custom_short
     else:
         short_code = _shorten_url()
- 
-    # === QR should encode the short link (for analytics) ===
+
+    # QR encodes short URL
     qr_data = f"{base_url}/{short_code}?source=qr"
- 
-    # === QR code generation ===
+
+    # Generate QR
     qr_dir = os.path.join(current_app.static_folder or "static", "qrcodes")
     os.makedirs(qr_dir, exist_ok=True)
+
     qr_filename = f"qr_{uuid.uuid4().hex}.png"
     qr_path = os.path.join(qr_dir, qr_filename)
- 
+
     try:
         fill_rgb = ImageColor.getrgb(color_dark)
-    except Exception:
+    except:
         fill_rgb = (0, 0, 0)
+
     back_rgb = (255, 255, 255)
- 
+
     drawer_map = {
         "square": SquareModuleDrawer(),
         "dots": GappedSquareModuleDrawer(),
@@ -757,8 +846,7 @@ def generate_qr(current_user):
         "beads": RoundedModuleDrawer(),
     }
     drawer = drawer_map.get(style, SquareModuleDrawer())
-    color_mask = SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
- 
+
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -767,60 +855,66 @@ def generate_qr(current_user):
     )
     qr.add_data(qr_data)
     qr.make(fit=True)
- 
+
     qr_img = qr.make_image(
         image_factory=StyledPilImage,
         module_drawer=drawer,
-        color_mask=color_mask
+        color_mask=SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
     ).convert("RGB")
- 
-    # ✅ Optional logo overlay
+
+    # Logo overlay
     if logo_data:
         try:
             if "," in logo_data:
                 logo_data = logo_data.split(",", 1)[1]
             logo_bytes = base64.b64decode(logo_data)
-            logo = Image.open(io.BytesIO(logo_bytes))
-            qr_width, qr_height = qr_img.size
-            logo_size = int(qr_width * 0.25)
-            logo = logo.resize((logo_size, logo_size))
-            pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
-            qr_img.paste(logo, pos)
+            logo_img = Image.open(io.BytesIO(logo_bytes))
+
+            qr_w, qr_h = qr_img.size
+            size = int(qr_w * 0.25)
+            logo_img = logo_img.resize((size, size))
+
+            pos = ((qr_w - size) // 2, (qr_h - size) // 2)
+            qr_img.paste(logo_img, pos)
         except Exception as e:
             current_app.logger.warning(f"Logo embedding failed: {e}")
- 
+
     qr_img.save(qr_path)
     static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static").replace("\\", "/")
- 
-    # === Save to DB ===
+
+    # Save to DB only
     new_url = Urls(
-    long=long_url,
-    short=short_code,
-    user_id=current_user.id,
-    qr_code=static_rel,
-    show_short=show_short,
-    color_dark=color_dark,
-    style=style,
-    logo=logo_data,
-    title=title 
+        long=long_url,
+        short=short_code,
+        user_id=current_user.id,
+        qr_code=static_rel,
+        show_short=show_short,
+        color_dark=color_dark,
+        style=style,
+        logo=logo_data,
+        title=title
     )
- 
+
     db.session.add(new_url)
     db.session.commit()
- 
-    # === Build response ===
-    response_data = {
+
+    # ❌ Do NOT write to Redis
+
+    data = {
         "title": title,
         "long_url": long_url,
         "qr_code": build_static_url(static_rel),
         "created_at": new_url.created_at.isoformat(),
         "show_short": show_short,
     }
- 
+
     if show_short:
-        response_data["short_url"] = f"{base_url}/{short_code}"
- 
-    return api_response(True, "QR code generated successfully.", response_data)
+        data["short_url"] = f"{base_url}/{short_code}"
+
+    return api_response(True, "QR code generated successfully.", data)
+
+
+
  
 @url_bp.route('/test-ip', methods=['POST'])
 def test_ip():
@@ -833,18 +927,17 @@ def test_ip():
     """
     data = request.get_json(silent=True) or {}
     ip = (data.get("ip") or "").strip()
-
+ 
     if not ip:
         return api_response(False, "JSON body must include 'ip'", None)
-
+ 
     location = get_location_from_ip(ip)
-
+ 
     return api_response(True, "IP lookup successful", {
         "ip": ip,
         "country": location.get("country"),
         "region": location.get("region"),
         "city": location.get("city")
     })
-
  
  
