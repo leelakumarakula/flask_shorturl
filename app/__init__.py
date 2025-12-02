@@ -15,6 +15,20 @@ from app.routes.url_routes import url_bp
 from app.routes.subscription_routes import subscription_bp
 
 
+# app/__init__.py
+ 
+import os
+from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
+ 
+from app.config import Config
+from app.extensions import db, cors, init_redis
+from app.utils.error_handler import register_error_handlers
+from app.routes.auth_routes import auth_bp
+from app.routes.core_routes import core_bp
+from app.routes.url_routes import url_bp
+ 
+ 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder="../static", static_url_path="/static")
 

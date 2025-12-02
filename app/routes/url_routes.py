@@ -30,26 +30,23 @@ from .. import extensions
 url_bp = Blueprint("url", __name__)
  
 def get_location_from_ip(ip: str | None) -> dict:
-    """
-    Fetch country, region (state), and city (district) from IP address.
-    Returns 'Unknown' if lookup fails.
-    """
     ip = ip or ""
     try:
-        res = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
-        if res.status_code == 200:
-            data = res.json()
+        resp = requests.get(f"https://ipwho.is/{ip}", timeout=3)
+        data = resp.json()
+        if data.get("success"):
             return {
-                "country": data.get("country_name", "Unknown"),
-                "region": data.get("region", "Unknown"),  # State / Province
-                "city": data.get("city", "Unknown"),      # District / City
+                "country": data.get("country", "Unknown"),
+
+                "region": data.get("region", "Unknown"),
+
+                "city": data.get("city", "Unknown"),
             }
-    except Exception as e:
-        logging.error(f"GeoIP lookup failed: {e}")
- 
+    except Exception:
+        pass
+
     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
- 
- 
+
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
     while True:
@@ -100,8 +97,8 @@ def _generate_qr_code(short_code: str) -> str:
     # Return a path relative to /static for URL building
     static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static")
     return static_rel.replace("\\", "/")
-
-
+ 
+ 
 def absolute_qr_path(rel_path: str) -> str:
     """
     Convert a stored relative QR path (e.g. 'qrcodes/qr_123.png')
@@ -109,10 +106,10 @@ def absolute_qr_path(rel_path: str) -> str:
     """
     if not rel_path:
         return None
-
+ 
     base_static = current_app.static_folder or "static"
     return os.path.join(base_static, rel_path.lstrip("/"))
-
+ 
  
 @url_bp.route('/create', methods=['POST'])
 @token_required
@@ -377,10 +374,10 @@ def get_analytics(current_user, short_url):
         return api_response(False, "URL not found or not yours", None)
 
     clicks = UrlAnalytics.query.filter_by(url_id=url_entry.id_).order_by(UrlAnalytics.timestamp.desc()).all()
-    
+   
     qr_clicks = sum(1 for c in clicks if c.source == "qr")
     direct_clicks = sum(1 for c in clicks if c.source == "direct")
-    
+   
     return api_response(True, "Analytics fetched", {
         "short_url": url_entry.short,
         "long_url": url_entry.long,
@@ -508,7 +505,7 @@ def my_urls(current_user):
             for u in urls
         ],
     })
-
+ 
  
  
 @url_bp.route('/urlcount', methods=['GET'])
@@ -527,7 +524,7 @@ def delete_url(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or you don't have permission to delete", None)
-
+ 
     # ✔ Convert relative QR path to absolute
     if url_entry.qr_code:
         file_path = absolute_qr_path(url_entry.qr_code)
@@ -536,10 +533,10 @@ def delete_url(current_user, short_url):
                 os.remove(file_path)
             except Exception as e:
                 current_app.logger.warning(f"Failed to delete QR file: {e}")
-
+ 
     # ✔ Delete analytics
     UrlAnalytics.query.filter_by(url_id=url_entry.id_).delete()
-
+ 
     # ✔ Delete URL
     db.session.delete(url_entry)
     db.session.commit()
@@ -552,7 +549,7 @@ def delete_url(current_user, short_url):
         pass
 
     return api_response(True, f"Short URL '{short_url}' deleted successfully.", None)
-
+ 
 import datetime
 import pytz
 from sqlalchemy import and_
@@ -616,7 +613,7 @@ def dashboard_stats(current_user):
         "total_short_links": total_short_links
     })
  
-
+ 
  
 @url_bp.route('/url/<short_url>', methods=['GET'])
 @token_required
@@ -671,11 +668,9 @@ def edit_short_url(current_user):
         if not url:
             return api_response(False, "Old short URL not found", None)
 
-        base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
+        base_url = current_app.config.get("BASE_URL")
 
-        # ---------------------------------------------------------
-        # CASE 1: URL HAS QR → REGENERATE QR + DELETE OLD QR FILE
-        # ---------------------------------------------------------
+        # CASE 1: URL HAS QR → regenerate
         if url.qr_code:
 
             old_qr_path = absolute_qr_path(url.qr_code)
@@ -683,7 +678,7 @@ def edit_short_url(current_user):
             if old_qr_path and os.path.exists(old_qr_path):
                 try:
                     os.remove(old_qr_path)
-                except Exception:
+                except:
                     pass
 
             qr_data = f"{base_url}/{new_short}?source=qr"
@@ -698,7 +693,7 @@ def edit_short_url(current_user):
 
             try:
                 fill_rgb = ImageColor.getrgb(color_dark)
-            except Exception:
+            except:
                 fill_rgb = (0, 0, 0)
 
             back_rgb = (255, 255, 255)
@@ -708,13 +703,8 @@ def edit_short_url(current_user):
                 "dots": GappedSquareModuleDrawer(),
                 "circle": CircleModuleDrawer(),
                 "rounded": RoundedModuleDrawer(),
-                "vertical-bars": GappedSquareModuleDrawer(),
-                "horizontal-bars": GappedSquareModuleDrawer(),
-                "mosaic": CircleModuleDrawer(),
-                "beads": RoundedModuleDrawer(),
             }
             drawer = drawer_map.get(style, SquareModuleDrawer())
-            color_mask = SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
 
             qr = qrcode.QRCode(
                 version=1,
@@ -728,12 +718,13 @@ def edit_short_url(current_user):
             qr_img = qr.make_image(
                 image_factory=StyledPilImage,
                 module_drawer=drawer,
-                color_mask=color_mask
+                color_mask=SolidFillColorMask(
+                    back_color=back_rgb, front_color=fill_rgb
+                )
             ).convert("RGB")
 
             try:
                 logo = None
-
                 if url.logo:
                     logo_data = url.logo.split(",", 1)[1] if "," in url.logo else url.logo
                     logo_bytes = base64.b64decode(logo_data)
@@ -744,14 +735,14 @@ def edit_short_url(current_user):
                     logo = Image.open(default_logo_path)
 
                 if logo:
-                    qr_width, qr_height = qr_img.size
-                    logo_size = int(qr_width * 0.25)
-                    logo = logo.resize((logo_size, logo_size))
-                    pos = ((qr_width - logo_size) // 2, (qr_height - logo_size) // 2)
+                    qr_w, qr_h = qr_img.size
+                    size = int(qr_w * 0.25)
+                    logo = logo.resize((size, size))
+                    pos = ((qr_w - size) // 2, (qr_h - size) // 2)
                     qr_img.paste(logo, pos)
 
             except Exception as e:
-                current_app.logger.warning(f"Logo embedding failed during edit: {e}")
+                current_app.logger.warning(f"Logo embed error: {e}")
 
             qr_img.save(qr_path)
             static_rel = os.path.relpath(qr_path, start=current_app.static_folder or "static").replace("\\", "/")
@@ -812,7 +803,6 @@ def edit_short_url(current_user):
 
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Edit short URL error: {e}")
         return api_response(False, str(e), None)
 
 
@@ -956,6 +946,7 @@ def generate_qr(current_user):
     # Image path setup
     qr_dir = os.path.join(current_app.static_folder or "static", "qrcodes")
     os.makedirs(qr_dir, exist_ok=True)
+
     qr_filename = f"qr_{uuid.uuid4().hex}.png"
     qr_path = os.path.join(qr_dir, qr_filename)
 
@@ -964,6 +955,7 @@ def generate_qr(current_user):
         fill_rgb = ImageColor.getrgb(color_dark)
     except:
         fill_rgb = (0, 0, 0)
+
     back_rgb = (255, 255, 255)
 
     drawer_map = {
@@ -992,7 +984,7 @@ def generate_qr(current_user):
     qr_img = qr.make_image(
         image_factory=StyledPilImage,
         module_drawer=drawer,
-        color_mask=color_mask
+        color_mask=SolidFillColorMask(back_color=back_rgb, front_color=fill_rgb)
     ).convert("RGB")
 
     # Logo support
