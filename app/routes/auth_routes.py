@@ -2,7 +2,7 @@ import secrets
 from flask import Blueprint, request
 from werkzeug.security import generate_password_hash
 from app.extensions import db
- 
+
 # from ..extensions import db
 from ..models.user import User
 from ..utils.jwt_helper import encode_token, decode_token
