@@ -215,7 +215,9 @@ def redirection(short_url):
             ttl = int(current_app.config.get("REDIS_TTL", 3600))
             if extensions.redis_client:
                 extensions.redis_client.setex(
-                    f"short:{short_url}",
+                    f"short:{url_entry.short}",
+                 # f"short:{short_url}",
+
                     ttl,
                     json.dumps({"long": long_url, "id": url_id})
                 )
