@@ -266,6 +266,23 @@ def redirection(short_url):
     if any(b in user_agent_str.lower() for b in bot_keywords):
         print(f">>> BOT skipped: {user_agent_str}")
         return redirect(long_url, code=302)
+    
+#added these for double hits come at a time in mobile 
+
+    try:
+        if extensions.redis_client:
+            ua_hash = hash(user_agent_str)
+            debounce_key = f"click:{short_url}:{ip_address}:{ua_hash}"
+
+            # duplicate click → don't count again
+            if extensions.redis_client.get(debounce_key):
+                return redirect(long_url, code=302)
+
+            # block duplicates for 2 seconds
+            extensions.redis_client.setex(debounce_key, 2, "1")
+    except:
+        pass
+# end of addition(up to these lines)
  
     # -------------------------------------
     # 6) Save analytics (only valid traffic)
