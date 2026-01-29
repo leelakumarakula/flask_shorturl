@@ -5,6 +5,7 @@ from app.extensions import db
  
 # from ..extensions import db
 from ..models.user import User
+from ..models.plan import Plan
 from ..utils.jwt_helper import encode_token, decode_token
 from ..utils.response import api_response
 from ..utils.passwords import verify_and_upgrade_password
@@ -30,6 +31,11 @@ def signup():
  
     client_id = secrets.token_hex(8)
     raw_secret = secrets.token_hex(16)
+
+    # Assign Free plan logic
+    # Assign Free plan logic
+    free_plan = Plan.query.filter_by(name='Free').first()
+    plan_id = free_plan.id if free_plan else None
  
     new_user = User(
         firstname=firstname,
@@ -39,7 +45,8 @@ def signup():
         email=email,
         password=password,
         client_id=client_id,
-        client_secret=raw_secret
+        client_secret=raw_secret,
+        plan_id=plan_id
     )
  
     db.session.add(new_user)
@@ -125,6 +132,59 @@ def token_required(f):
 @token_required
 def home(current_user):
     return api_response(True, f"Welcome Home {current_user.firstname}", None)
+
+
+@auth_bp.route('/plans', methods=['GET'])
+def get_plans():
+    plans = Plan.query.order_by(Plan.price_usd.asc()).all()
+    
+    plans_data = []
+    for p in plans:
+        plans_data.append({
+            "id": p.id,
+            "name": p.name,
+            "prices": {
+                "usd": p.price_usd,
+                "inr": p.price_inr
+            },
+            "limits": {
+                "max_links": p.max_links,
+                "max_qrs": p.max_qrs,
+                "max_custom_links": p.max_custom_links,
+                "max_qr_with_logo": p.max_qr_with_logo,
+                "max_editable_links": p.max_editable_links
+            },
+            "permissions": {
+                "allow_qr_styling": p.allow_qr_styling,
+                "allow_analytics": p.allow_analytics,
+                "show_individual_stats": p.show_individual_stats,
+                "allow_api_access": p.allow_api_access,
+                "analytics_level": p.analytics_level
+            }
+        })
+
+    return api_response(True, "Plans fetched successfully", plans_data)
+ 
+ 
+@auth_bp.route('/simulate-upgrade', methods=['POST'])
+@token_required
+def simulate_upgrade(current_user):
+    data = request.get_json()
+    plan_name = data.get('plan_name')
+    
+    new_plan = Plan.query.filter(Plan.name == plan_name).first()
+    if not new_plan:
+        # Case insensitive fallback
+        new_plan = Plan.query.filter(Plan.name.ilike(plan_name)).first()
+    
+    if new_plan:
+        current_user.plan_id = new_plan.id
+        db.session.commit()
+        return api_response(True, f"Successfully upgraded to {new_plan.name} (Test Mode)", {
+            "new_plan": new_plan.name
+        })
+    
+    return api_response(False, "Plan not found", None)
  
  
  
