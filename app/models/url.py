@@ -17,6 +17,10 @@ class Urls(db.Model):
     color_dark = db.Column(db.String(20))
     style = db.Column(db.String(50))
     logo = db.Column(db.Text)
+
+    # Subscription tracking fields
+    is_custom = db.Column(db.Boolean, default=False)
+    is_edited = db.Column(db.Boolean, default=False)
  
  
  

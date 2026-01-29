@@ -85,6 +85,7 @@ def create_app() -> Flask:
  
     # Create tables if not exists
     with app.app_context():
+        from app.models.plan import Plan
         from app.models.user import User
         from app.models.url import Urls
         from app.models.url_analytics import UrlAnalytics
