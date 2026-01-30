@@ -435,8 +435,8 @@ def display_user_info(current_user):
             "organization": current_user.organization,
             "password": current_user.password,
             "phone": current_user.phone,
-            "client_id": current_user.client_id,
-            "client_secret": current_user.client_secret,
+            "client_id": current_user.client_id if (plan and plan.allow_api_access) else None,
+            "client_secret": current_user.client_secret if (plan and plan.allow_api_access) else None,
             "created_at": current_user.created_at.isoformat(),
             "usage_links": current_user.usage_links or 0,
             "usage_qrs": current_user.usage_qrs or 0,
@@ -617,8 +617,7 @@ def dashboard_stats(current_user):
     # your new fields (unchanged)
     total_short_links = Urls.query.filter_by(
         user_id=current_user.id,
-        show_short=True,
-        qr_code=None
+        show_short=True
     ).count()
  
     total_qrs = Urls.query.filter(
