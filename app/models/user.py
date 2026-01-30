@@ -20,7 +20,7 @@ class User(db.Model):
     usage_links = db.Column(db.Integer, default=0, nullable=False)
     usage_qrs = db.Column(db.Integer, default=0, nullable=False)
     usage_qr_with_logo = db.Column(db.Integer, default=0, nullable=False)
-
+    usage_editable_links = db.Column(db.Integer, default=0, nullable=False)
     plan_id = db.Column(db.Integer, db.ForeignKey('plans.id'), nullable=True)
     plan = db.relationship("Plan", backref=db.backref("users", lazy=True))
  

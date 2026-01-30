@@ -10,6 +10,9 @@ WHERE name = 'Premium';
 
 -- Add Usage Columns (If not already added)
 -- Note: These run automatically via the migration script previously, 
--- but you can run them manually if needed.
--- ALTER TABLE users ADD usage_links INT NOT NULL DEFAULT 0;
+-- New column for Editable Links usage (Run this!)
+-- ALTER TABLE users ADD usage_editable_links INT NOT NULL DEFAULT 0;
+
+-- New column for URL Plan Name (Run this!)
+ALTER TABLE urls ADD plan_name VARCHAR(50);
 -- ALTER TABLE users ADD usage_qrs INT NOT NULL DEFAULT 0;

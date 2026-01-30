@@ -21,6 +21,7 @@ class Urls(db.Model):
     # Subscription tracking fields
     is_custom = db.Column(db.Boolean, default=False)
     is_edited = db.Column(db.Boolean, default=False)
+    plan_name = db.Column(db.String(50), nullable=True)
  
  
  
