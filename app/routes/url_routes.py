@@ -91,6 +91,7 @@ def create(current_user):
     # SUBSCRIPTION LIMIT CHECKS (CONSUMPTION BASED)
     # -----------------------------
     plan = current_user.plan
+    print("plan name ", plan.name)
     if plan:
         # 1. Consumption Limit: Usage Links
         # Always check link limit because a link is ALWAYS created
@@ -163,7 +164,8 @@ def create(current_user):
         user_id=current_user.id,
         qr_code=qr_path,
         title=title,
-        is_custom=is_custom_flag
+        is_custom=is_custom_flag,
+        plan_name=plan.name if plan else 'Free'
     )
     db.session.add(new_url)
 
@@ -713,12 +715,19 @@ def edit_short_url(current_user):
                 logo_path=r_logo_path
             )
             
+            # Increment usage if this is the first edit
+            if not url.is_edited:
+                 current_user.usage_editable_links = (current_user.usage_editable_links or 0) + 1
+                 db.session.add(current_user)
+
             # Update DB
             url.short = new_short
             url.qr_code = static_rel
             url.is_edited = True
             db.session.commit()
-
+        
+            
+       
             # NEW ✔ Delete old key from Redis
             try:
                 if extensions.redis_client:

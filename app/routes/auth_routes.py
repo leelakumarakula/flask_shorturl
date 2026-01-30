@@ -179,6 +179,13 @@ def simulate_upgrade(current_user):
     
     if new_plan:
         current_user.plan_id = new_plan.id
+        
+        # RESET USAGE on Plan Upgrade/Change
+        current_user.usage_links = 0
+        current_user.usage_qrs = 0
+        current_user.usage_qr_with_logo = 0
+        current_user.usage_editable_links = 0
+        
         db.session.commit()
         return api_response(True, f"Successfully upgraded to {new_plan.name} (Test Mode)", {
             "new_plan": new_plan.name
