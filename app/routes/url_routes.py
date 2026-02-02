@@ -158,6 +158,11 @@ def create(current_user):
 
 
     # Save to DB only
+    
+    # Allow frontend to pass plan_name (explicitly requested flow)
+    req_plan_name = data.get("plan_name")
+    final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'Free')
+
     new_url = Urls(
         long=long_url,
         short=short_code,
@@ -165,7 +170,7 @@ def create(current_user):
         qr_code=qr_path,
         title=title,
         is_custom=is_custom_flag,
-        plan_name=plan.name if plan else 'Free'
+        plan_name=final_plan_name
     )
     db.session.add(new_url)
 
@@ -906,6 +911,11 @@ def generate_qr(current_user):
     static_rel = generate_styled_qr(short_code, color_dark, style, logo_data, logo_path=logo_path_arg)
     
     # Save to DB only
+    
+    # Allow frontend to pass plan_name
+    req_plan_name = data.get("plan_name")
+    final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'Free')
+
     new_url = Urls(
         long=long_url,
         short=short_code,
@@ -917,7 +927,8 @@ def generate_qr(current_user):
         logo=logo_data,
         title=title,
         is_custom=bool(custom_short),
-        is_edited=False
+        is_edited=False,
+        plan_name=final_plan_name
     )
 
     db.session.add(new_url)
