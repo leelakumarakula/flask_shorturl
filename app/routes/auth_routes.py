@@ -1,4 +1,5 @@
 import secrets
+import json
 from flask import Blueprint, request
 from werkzeug.security import generate_password_hash
 from app.extensions import db
@@ -160,6 +161,12 @@ def get_plans():
                 "show_individual_stats": p.show_individual_stats,
                 "allow_api_access": p.allow_api_access,
                 "analytics_level": p.analytics_level
+            },
+            "razorpay": {
+                "period": p.period,
+                "interval": p.interval,
+                "item": json.loads(p.item) if p.item else None,
+                "notes": json.loads(p.notes) if p.notes else None
             }
         })
 

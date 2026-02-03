@@ -24,5 +24,11 @@ class Plan(db.Model):
     # Config
     analytics_level = db.Column(db.String(20), default='none')  # none, basic, detailed
 
+    # Razorpay Plan Details
+    period = db.Column(db.String(50), nullable=True)  # daily, weekly, monthly, yearly
+    interval = db.Column(db.Integer, nullable=True)
+    item = db.Column(db.Text, nullable=True)  # JSON string
+    notes = db.Column(db.Text, nullable=True)  # JSON string
+
     def __repr__(self):
         return f"<Plan {self.name}>"
