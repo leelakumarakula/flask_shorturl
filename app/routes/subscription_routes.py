@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
+import json
 from app.extensions import db
 from app.models.subscription import RazorpaySubscriptionPlan, Subscription
 from app.models.subscription import RazorpaySubscriptionPlan, Subscription
@@ -146,8 +147,6 @@ def create_subscription(current_user):
             total_count = data.get('total_count', 12)
             quantity = data.get('quantity', 1)
             customer_notify = data.get('customer_notify', 1)
-            start_at = data.get('start_at')
-            expire_by = data.get('expire_by')
             addons = data.get('addons')
             offer_id = data.get('offer_id')
             notes = data.get('notes', {})
@@ -166,8 +165,6 @@ def create_subscription(current_user):
             }
 
             # Add optional fields if present
-            if start_at: payload['start_at'] = start_at
-            if expire_by: payload['expire_by'] = expire_by
             if addons: payload['addons'] = addons
             if offer_id: payload['offer_id'] = offer_id
             
@@ -196,15 +193,16 @@ def create_subscription(current_user):
                 razorpay_subscription_id=sub_id,
                 subscription_status='Pending',
                 created_date=datetime.datetime.utcnow(),
+                # next_billing_date will be updated upon activation
                 next_billing_date=datetime.datetime.utcnow(),
                 total_count=total_count,
                 customer_notify=bool(customer_notify),
-                start_at=start_at,
-                expire_by=expire_by,
                 addons=str(addons) if addons else None,
                 offer_id=offer_id,
-                notes=str(notes),
-                plan_amount=plan_amount_val
+                notes=json.dumps(notes),
+                plan_amount=plan_amount_val,
+                ip_address=request.headers.get('X-Forwarded-For', request.remote_addr),
+                short_url=sub_data.get('short_url')
             )
             
             db.session.add(new_sub)
@@ -217,6 +215,182 @@ def create_subscription(current_user):
 
         except Exception as e:
              return jsonify({'error': str(e)}), 500
+
+
+@subscription_bp.route('/create_plan_and_subscription', methods=['POST'])
+@token_required
+def create_plan_and_subscription(current_user):
+    """Combined endpoint to create plan and subscription in one call"""
+    with plan_lock:
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No input data provided'}), 400
+
+            # Extract plan data
+            plan_data = data.get('plan')
+            if not plan_data:
+                return jsonify({'error': 'Missing plan data'}), 400
+
+            period = plan_data.get('period')
+            interval = plan_data.get('interval')
+            item = plan_data.get('item')
+            notes = plan_data.get('notes')
+
+            if not all([period, interval, item]):
+                return jsonify({'error': 'Missing required plan fields: period, interval, item'}), 400
+
+            # Check for existing plan to prevent duplicates
+            plan_name = item.get('name')
+            existing_plan = RazorpaySubscriptionPlan.query.filter_by(
+                plan_name=plan_name,
+                period=period,
+                interval=interval
+            ).first()
+
+            razorpay_key_id = current_app.config.get('RAZORPAY_KEY_ID')
+            razorpay_key_secret = current_app.config.get('RAZORPAY_KEY_SECRET')
+
+            if not razorpay_key_id or not razorpay_key_secret:
+                return jsonify({'error': 'Razorpay credentials not configured'}), 500
+
+            # Create or get plan
+            if existing_plan:
+                print(f"DEBUG: Using existing plan {existing_plan.razorpay_plan_id} for {plan_name}")
+                razorpay_plan_id = existing_plan.razorpay_plan_id
+            else:
+                # Create new plan on Razorpay
+                url = "https://api.razorpay.com/v1/plans"
+                response = requests.post(
+                    url,
+                    json={
+                        "period": period,
+                        "interval": interval,
+                        "item": item,
+                        "notes": notes
+                    },
+                    auth=(razorpay_key_id, razorpay_key_secret)
+                )
+
+                if response.status_code != 200:
+                    print(f"DEBUG: Razorpay Plan Creation Failed: {response.text}")
+                    return jsonify({'error': 'Razorpay plan creation failed', 'details': response.json()}), response.status_code
+
+                razorpay_data = response.json()
+                razorpay_plan_id = razorpay_data.get('id')
+
+                # Create Database Record
+                new_plan = RazorpaySubscriptionPlan(
+                    plan_name=item.get('name'),
+                    razorpay_plan_id=razorpay_plan_id,
+                    user_id=current_user.id,
+                    period=period,
+                    interval=interval,
+                    amount=item.get('amount') / 100.0 if item.get('amount') else 0.0,
+                    is_active=True,
+                    pro_rated_amount=0.0
+                )
+
+                db.session.add(new_plan)
+                db.session.commit()
+                print(f"DEBUG: Created new plan {razorpay_plan_id} for {plan_name}")
+
+            # Check for existing PENDING subscription to reuse
+            existing_sub = Subscription.query.filter_by(
+                user_id=current_user.id,
+                razorpay_plan_id=razorpay_plan_id,
+                subscription_status='Pending'
+            ).order_by(Subscription.created_date.desc()).first()
+
+            if existing_sub:
+                print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
+                return jsonify({
+                    'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
+                    'razorpay_plan_id': razorpay_plan_id,
+                    'key_id': razorpay_key_id,
+                    'status': existing_sub.subscription_status
+                }), 200
+
+            # Create subscription on Razorpay
+            subscription_data = data.get('subscription', {})
+            total_count = subscription_data.get('total_count', 12)
+            quantity = subscription_data.get('quantity', 1)
+            customer_notify = subscription_data.get('customer_notify', 1)
+            addons = subscription_data.get('addons')
+            offer_id = subscription_data.get('offer_id')
+            sub_notes = subscription_data.get('notes', {})
+
+            # Ensure notes has user info
+            if not sub_notes:
+                sub_notes = {}
+            sub_notes['user_id'] = current_user.id
+            sub_notes['email'] = current_user.email
+
+            payload = {
+                "plan_id": razorpay_plan_id,
+                "total_count": total_count,
+                "quantity": quantity,
+                "customer_notify": customer_notify,
+                "notes": sub_notes
+            }
+
+            # Add optional fields if present
+            if addons:
+                payload['addons'] = addons
+            if offer_id:
+                payload['offer_id'] = offer_id
+
+            url = "https://api.razorpay.com/v1/subscriptions"
+            response = requests.post(
+                url,
+                json=payload,
+                auth=(razorpay_key_id, razorpay_key_secret)
+            )
+
+            if response.status_code != 200:
+                return jsonify({'error': 'Failed to create subscription', 'details': response.json()}), response.status_code
+
+            sub_data = response.json()
+            print(f"DEBUG: Created subscription {sub_data}")
+            sub_id = sub_data.get('id')
+
+            # Fetch plan details to get the amount
+            fetched_plan = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=razorpay_plan_id).first()
+            plan_amount_val = fetched_plan.amount if fetched_plan else 0.0
+
+            # Create Subscription Record
+            new_sub = Subscription(
+                user_id=current_user.id,
+                razorpay_plan_id=razorpay_plan_id,
+                razorpay_subscription_id=sub_id,
+                subscription_status='Pending',
+                created_date=datetime.datetime.utcnow(),
+                # subscription_start_date and next_billing_date will be updated upon activation
+                subscription_start_date=None,
+                next_billing_date=None,
+                total_count=total_count,
+                customer_notify=bool(customer_notify),
+                addons=str(addons) if addons else None,
+                offer_id=offer_id,
+                notes=json.dumps(sub_notes),
+                plan_amount=plan_amount_val,
+                ip_address=request.headers.get('X-Forwarded-For', request.remote_addr),
+                short_url=sub_data.get('short_url')
+            )
+
+            db.session.add(new_sub)
+            db.session.commit()
+
+            return jsonify({
+                'razorpay_subscription_id': sub_id,
+                'razorpay_plan_id': razorpay_plan_id,
+                'key_id': razorpay_key_id,
+                'razorpay_response': sub_data
+            }), 200
+
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
 
 
 @subscription_bp.route('/verify_payment', methods=['POST'])
@@ -249,41 +423,49 @@ def verify_payment(current_user):
         if sub:
             sub.subscription_status = 'Active'
             sub.is_active = True
-            sub.razorpay_signature_id = razorpay_signature # Storing signature as requested in model? Model has `razorpay_signature_id`
-            sub.razorpay_payment_id = razorpay_payment_id # Wait, model didn't have payment_id? It had card_id.
-            # Model has `razorpay_signature_id`. I'll put signature there.
+            sub.razorpay_signature_id = razorpay_signature
             
-            sub.subscription_start_date = datetime.datetime.utcnow()
-            # Next billing date logic dependent on plan interval, Razorpay manages it but we might want to store it.
-            # For now update start date.
+            # Ensure card_id is null (or None in Python)
+            sub.card_id = None
             
-            # Link plan to user
-            # Find the plan using razorpay_plan_id
+            now_utc = datetime.datetime.utcnow()
+            sub.subscription_start_date = now_utc
+            sub.updated_date = now_utc
+            
+            # Calculate End Date and Next Billing Date based on Plan Period
+            # Fetch the plan to check period
             rz_plan = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=sub.razorpay_plan_id).first()
+            if rz_plan:
+                period_lower = (rz_plan.period or "").lower()
+                if "monthly" in period_lower:
+                    sub.subscription_end_date = now_utc + datetime.timedelta(days=30)
+                elif "yearly" in period_lower:
+                    sub.subscription_end_date = now_utc + datetime.timedelta(days=360)
+                else:
+                    # Default fallback if unknown, say 30 days
+                    sub.subscription_end_date = now_utc + datetime.timedelta(days=30)
+                
+                sub.next_billing_date = sub.subscription_end_date
+            
+            # Link plan to user (Logic preserved)
             print(f"DEBUG: Found Razorpay Plan: {rz_plan}")
             if rz_plan:
                  print(f"DEBUG: Plan Name from Razorpay: {rz_plan.plan_name}")
-                 # Check 'app/models/plan.py' to see if we can map this generic Razorpay plan to our internal Plan ID
                  internal_plan = Plan.query.filter_by(name=rz_plan.plan_name).first()
-                 print(f"DEBUG: Internal Plan Found: {internal_plan}")
                  if internal_plan:
                      current_user.plan_id = internal_plan.id
                      print(f"DEBUG: Updated User {current_user.id} to Plan ID {internal_plan.id}")
                  else:
-                     # Fallback: Check if internal plan name is part of razorpay plan name (e.g. "Pro" in "pro plan - monthly")
                      all_plans = Plan.query.all()
-                     print(f"DEBUG: Exact match failed. Searching through {len(all_plans)} plans...")
                      for p in all_plans:
                          if p.name.lower() in rz_plan.plan_name.lower():
                              internal_plan = p
                              print(f"DEBUG: Found Partial Match: {p.name} in {rz_plan.plan_name}")
                              break
-                     
                      if internal_plan:
                          current_user.plan_id = internal_plan.id
                          print(f"DEBUG: Updated User {current_user.id} to Plan ID {internal_plan.id} (Fallback)")
 
-            
             # Update Billing Info with Razorpay Details
             from app.models.billing_info import BillingInfo
             billing_info = BillingInfo.query.filter_by(user_id=current_user.id).order_by(BillingInfo.created_at.desc()).first()

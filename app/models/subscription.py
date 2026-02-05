@@ -32,21 +32,19 @@ class Subscription(db.Model):
     razorpay_subscription_id = db.Column(db.String(255), default='', nullable=True)
     razorpay_signature_id = db.Column(db.String(255), default='', nullable=True)
     subscription_status = db.Column(db.String(50), default='Pending', nullable=True)
-    subscription_start_date = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=True)
+    subscription_start_date = db.Column(db.DateTime, nullable=True)
     subscription_end_date = db.Column(db.DateTime, nullable=True)
     created_date = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=True)
     updated_date = db.Column(db.DateTime, nullable=True)
     ip_address = db.Column(db.String(50), default='', nullable=True)
     is_active = db.Column(db.Boolean, default=False, nullable=True)
-    basic_plan_id = db.Column(db.Integer, default=0, nullable=True)
-    next_billing_date = db.Column(db.DateTime, nullable=False)
+
+    next_billing_date = db.Column(db.DateTime, nullable=True)
     is_add_on = db.Column(db.Boolean, default=False, nullable=True)
     short_url = db.Column(db.String(255), default='', nullable=True)
     card_id = db.Column(db.String(255), default='', nullable=True)
     total_count = db.Column(db.Integer, default=12, nullable=True)
     customer_notify = db.Column(db.Boolean, default=True, nullable=True)
-    start_at = db.Column(db.Integer, nullable=True) # Timestamp
-    expire_by = db.Column(db.Integer, nullable=True) # Timestamp
     addons = db.Column(db.Text, nullable=True) # Storing JSON as Text
     offer_id = db.Column(db.String(255), nullable=True)
     notes = db.Column(db.Text, nullable=True) # Storing JSON as Text
