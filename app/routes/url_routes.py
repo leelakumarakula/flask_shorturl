@@ -91,7 +91,7 @@ def create(current_user):
     # SUBSCRIPTION LIMIT CHECKS (CONSUMPTION BASED)
     # -----------------------------
     plan = current_user.plan
-    print("plan name ", plan.name)
+
     if plan:
         # 1. Consumption Limit: Usage Links
         # Always check link limit because a link is ALWAYS created
