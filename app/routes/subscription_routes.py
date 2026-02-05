@@ -284,13 +284,54 @@ def verify_payment(current_user):
                          print(f"DEBUG: Updated User {current_user.id} to Plan ID {internal_plan.id} (Fallback)")
 
             
-            db.session.commit()
-            return jsonify({'message': 'Subscription verified and activated'}), 200
-            
+            # Update Billing Info with Razorpay Details
+            from app.models.billing_info import BillingInfo
+            billing_info = BillingInfo.query.filter_by(user_id=current_user.id).order_by(BillingInfo.created_at.desc()).first()
+            if billing_info:
+                billing_info.razorpay_plan_id = sub.razorpay_plan_id
+                billing_info.razorpay_subscription_id = razorpay_subscription_id
+                print(f"DEBUG: Updated BillingInfo {billing_info.id} with Razorpay IDs")
+
             db.session.commit()
             return jsonify({'message': 'Subscription verified and activated'}), 200
         else:
             return jsonify({'error': 'Subscription not found'}), 404
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@subscription_bp.route('/save_billing_info', methods=['POST'])
+@token_required
+def save_billing_info(current_user):
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No input data provided'}), 400
+
+        # Validate required fields
+        required_fields = ['first_name', 'email', 'phone_number']
+        if not all(data.get(field) for field in required_fields):
+             return jsonify({'error': 'Missing required fields'}), 400
+
+        from app.models.billing_info import BillingInfo
+
+        # Create new Billing Info record
+        billing_info = BillingInfo(
+            user_id=current_user.id,
+            first_name=data.get('first_name'),
+            last_name=data.get('last_name'),
+            email=data.get('email'),
+            phone_number=data.get('phone_number'),
+            address=data.get('address'),
+            amount=data.get('amount'),
+            plan_id=data.get('plan_id')
+        )
+
+        db.session.add(billing_info)
+        db.session.commit()
+
+        return jsonify({'message': 'Billing info saved successfully', 'id': billing_info.id}), 201
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

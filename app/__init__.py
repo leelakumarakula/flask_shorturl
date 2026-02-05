@@ -93,6 +93,7 @@ def create_app() -> Flask:
         from app.models.url import Urls
         from app.models.url_analytics import UrlAnalytics
         from app.models.subscription import RazorpaySubscriptionPlan, Subscription
+        from app.models.billing_info import BillingInfo
         db.create_all()
  
     return app

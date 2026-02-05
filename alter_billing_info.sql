@@ -1,0 +1,2 @@
+ALTER TABLE billing_info ADD COLUMN amount FLOAT DEFAULT 0.0;
+ALTER TABLE billing_info ADD COLUMN plan_id INTEGER;

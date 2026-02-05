@@ -35,7 +35,7 @@ def signup():
 
     # Assign Free plan logic
     # Assign Free plan logic
-    free_plan = Plan.query.filter_by(name='Free').first()
+    free_plan = Plan.query.filter_by(name='FREE').first()
     plan_id = free_plan.id if free_plan else None
  
     new_user = User(
