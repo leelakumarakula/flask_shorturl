@@ -37,6 +37,9 @@ class Config:
  
     REDIS_URL = os.getenv("REDIS_URL")
     REDIS_TTL = int(os.getenv("REDIS_TTL", 3600))
+
+    RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+    RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
  
     if not REDIS_URL:
         REDIS_URL = "redis://localhost:6379/0"
