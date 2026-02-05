@@ -82,6 +82,9 @@ def create_app() -> Flask:
     app.register_blueprint(core_bp)
     app.register_blueprint(auth_bp, url_prefix="/")
     app.register_blueprint(url_bp, url_prefix="/")
+    
+    from app.routes.subscription_routes import subscription_bp
+    app.register_blueprint(subscription_bp, url_prefix="/api/subscription")
  
     # Create tables if not exists
     with app.app_context():
@@ -89,6 +92,7 @@ def create_app() -> Flask:
         from app.models.user import User
         from app.models.url import Urls
         from app.models.url_analytics import UrlAnalytics
+        from app.models.subscription import RazorpaySubscriptionPlan, Subscription
         db.create_all()
  
     return app
