@@ -5,6 +5,7 @@ from app.models.subscription import RazorpaySubscriptionPlan, Subscription
 from app.models.subscription import RazorpaySubscriptionPlan, Subscription
 from app.models.user import User
 from app.models.plan import Plan
+from app.models.webhook_events import WebhookEvent
 from app.routes.auth_routes import token_required
 import requests
 import base64
@@ -313,7 +314,7 @@ def create_plan_and_subscription(current_user):
 
             # Create subscription on Razorpay
             subscription_data = data.get('subscription', {})
-            total_count = subscription_data.get('total_count', 12)
+            # total_count = subscription_data.get('total_count', 12)
             quantity = subscription_data.get('quantity', 1)
             customer_notify = subscription_data.get('customer_notify', 1)
             addons = subscription_data.get('addons')
@@ -325,7 +326,11 @@ def create_plan_and_subscription(current_user):
                 sub_notes = {}
             sub_notes['user_id'] = current_user.id
             sub_notes['email'] = current_user.email
-
+            plan_data = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=razorpay_plan_id).first()
+            if plan_data.period == 'yearly':
+                total_count = 25
+            else:
+                total_count = 350
             payload = {
                 "plan_id": razorpay_plan_id,
                 "total_count": total_count,
@@ -396,6 +401,10 @@ def create_plan_and_subscription(current_user):
 @subscription_bp.route('/verify_payment', methods=['POST'])
 @token_required
 def verify_payment(current_user):
+    """
+    Verify payment signature and check subscription status.
+    This endpoint ONLY checks status - all activation is handled by webhooks.
+    """
     try:
         data = request.get_json()
         razorpay_payment_id = data.get('razorpay_payment_id')
@@ -405,9 +414,8 @@ def verify_payment(current_user):
         if not all([razorpay_payment_id, razorpay_subscription_id, razorpay_signature]):
             return jsonify({'error': 'Missing payment details'}), 400
 
+        # Verify signature for security
         razorpay_key_secret = current_app.config.get('RAZORPAY_KEY_SECRET')
-        
-        # Verify Signature
         msg = f"{razorpay_payment_id}|{razorpay_subscription_id}"
         generated_signature = hmac.new(
             bytes(razorpay_key_secret, 'latin-1'),
@@ -416,70 +424,57 @@ def verify_payment(current_user):
         ).hexdigest()
 
         if generated_signature != razorpay_signature:
-             return jsonify({'error': 'Invalid signature'}), 400
+            return jsonify({'error': 'Invalid signature'}), 400
 
-        # Update Subscription Status
+        # Get subscription
         sub = Subscription.query.filter_by(razorpay_subscription_id=razorpay_subscription_id).first()
-        if sub:
-            sub.subscription_status = 'Active'
-            sub.is_active = True
-            sub.razorpay_signature_id = razorpay_signature
-            
-            # Ensure card_id is null (or None in Python)
-            sub.card_id = None
-            
-            now_utc = datetime.datetime.utcnow()
-            sub.subscription_start_date = now_utc
-            sub.updated_date = now_utc
-            
-            # Calculate End Date and Next Billing Date based on Plan Period
-            # Fetch the plan to check period
-            rz_plan = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=sub.razorpay_plan_id).first()
-            if rz_plan:
-                period_lower = (rz_plan.period or "").lower()
-                if "monthly" in period_lower:
-                    sub.subscription_end_date = now_utc + datetime.timedelta(days=30)
-                elif "yearly" in period_lower:
-                    sub.subscription_end_date = now_utc + datetime.timedelta(days=360)
-                else:
-                    # Default fallback if unknown, say 30 days
-                    sub.subscription_end_date = now_utc + datetime.timedelta(days=30)
-                
-                sub.next_billing_date = sub.subscription_end_date
-            
-            # Link plan to user (Logic preserved)
-            print(f"DEBUG: Found Razorpay Plan: {rz_plan}")
-            if rz_plan:
-                 print(f"DEBUG: Plan Name from Razorpay: {rz_plan.plan_name}")
-                 internal_plan = Plan.query.filter_by(name=rz_plan.plan_name).first()
-                 if internal_plan:
-                     current_user.plan_id = internal_plan.id
-                     print(f"DEBUG: Updated User {current_user.id} to Plan ID {internal_plan.id}")
-                 else:
-                     all_plans = Plan.query.all()
-                     for p in all_plans:
-                         if p.name.lower() in rz_plan.plan_name.lower():
-                             internal_plan = p
-                             print(f"DEBUG: Found Partial Match: {p.name} in {rz_plan.plan_name}")
-                             break
-                     if internal_plan:
-                         current_user.plan_id = internal_plan.id
-                         print(f"DEBUG: Updated User {current_user.id} to Plan ID {internal_plan.id} (Fallback)")
-
-            # Update Billing Info with Razorpay Details
-            from app.models.billing_info import BillingInfo
-            billing_info = BillingInfo.query.filter_by(user_id=current_user.id).order_by(BillingInfo.created_at.desc()).first()
-            if billing_info:
-                billing_info.razorpay_plan_id = sub.razorpay_plan_id
-                billing_info.razorpay_subscription_id = razorpay_subscription_id
-                print(f"DEBUG: Updated BillingInfo {billing_info.id} with Razorpay IDs")
-
-            db.session.commit()
-            return jsonify({'message': 'Subscription verified and activated'}), 200
-        else:
+        
+        if not sub:
             return jsonify({'error': 'Subscription not found'}), 404
+        
+        # Store the verified signature
+        sub.razorpay_signature_id = razorpay_signature
+        db.session.commit()
+        print(f"DEBUG: Stored razorpay_signature for subscription {razorpay_subscription_id}")
+
+        # Check if webhook has processed this payment
+        webhook_processed = WebhookEvent.query.filter_by(
+            subscription_id=razorpay_subscription_id,
+            processed=True
+        ).filter(
+            WebhookEvent.event_type.in_(['payment.captured', 'subscription.activated'])
+        ).first()
+
+        # Return current status based on webhook processing
+        if webhook_processed and sub.subscription_status == 'Active':
+            print(f"DEBUG: Webhook processed and subscription active for {razorpay_subscription_id}")
+            return jsonify({
+                'message': 'Subscription verified and activated by webhook',
+                'status': 'Active',
+                'subscription_id': razorpay_subscription_id,
+                'webhook_processed': True
+            }), 200
+        elif sub.subscription_status == 'Active':
+            print(f"DEBUG: Subscription already active for {razorpay_subscription_id}")
+            return jsonify({
+                'message': 'Subscription is active',
+                'status': 'Active',
+                'subscription_id': razorpay_subscription_id,
+                'webhook_processed': bool(webhook_processed)
+            }), 200
+        else:
+            # Payment verified but webhook hasn't processed yet
+            print(f"INFO: Payment verified but webhook pending for {razorpay_subscription_id}")
+            return jsonify({
+                'message': 'Payment verified, waiting for webhook to activate subscription',
+                'status': sub.subscription_status,
+                'subscription_id': razorpay_subscription_id,
+                'webhook_processed': False,
+                'note': 'Subscription will be activated automatically by webhook'
+            }), 202  # 202 Accepted - processing in progress
 
     except Exception as e:
+        print(f"ERROR: verify_payment failed: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 

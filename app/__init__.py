@@ -85,6 +85,9 @@ def create_app() -> Flask:
     
     from app.routes.subscription_routes import subscription_bp
     app.register_blueprint(subscription_bp, url_prefix="/api/subscription")
+    
+    from app.routes.webhook_routes import webhook_bp
+    app.register_blueprint(webhook_bp, url_prefix="/api/subscription")
  
     # Create tables if not exists
     with app.app_context():
@@ -94,6 +97,7 @@ def create_app() -> Flask:
         from app.models.url_analytics import UrlAnalytics
         from app.models.subscription import RazorpaySubscriptionPlan, Subscription
         from app.models.billing_info import BillingInfo
+        from app.models.webhook_events import WebhookEvent
         db.create_all()
  
     return app
