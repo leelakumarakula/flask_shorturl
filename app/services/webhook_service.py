@@ -51,6 +51,9 @@ def store_webhook_event(event_data, signature):
         WebhookEvent: Created webhook event record or None if duplicate
     """
     try:
+        # Log full payload for debugging
+        print(f"DEBUG: Full webhook payload: {json.dumps(event_data, indent=2)}")
+        
         event_id = event_data.get('event')
         # Use a combination of event and created_at for unique ID if event field is not unique
         # Razorpay uses 'event' for event type, not unique ID
@@ -67,24 +70,104 @@ def store_webhook_event(event_data, signature):
         event_type = event_data.get('event', 'unknown')
         payload_obj = event_data.get('payload', {})
         
-        # Try to extract subscription and payment IDs
+        # Initialize variables
         subscription_id = None
         payment_id = None
         user_id = None
+        invoice_id = None
+        order_id = None
         
-        # Check payment entity
+        # Extract payment data - try multiple paths
+        # Path 1: payload.payment.entity (nested structure)
         payment_entity = payload_obj.get('payment', {}).get('entity', {})
-        if payment_entity:
-            payment_id = payment_entity.get('id')
         
-        # Check subscription entity
+        # Path 2: If nested structure is empty, try direct payment object
+        if not payment_entity or not payment_entity.get('id'):
+            payment_entity = payload_obj.get('payment', {})
+        
+        if payment_entity and payment_entity.get('id'):
+            payment_id = payment_entity.get('id')
+            invoice_id = payment_entity.get('invoice_id')
+            order_id = payment_entity.get('order_id')
+            
+            # Try to get user_id from payment notes (notes can be dict or array)
+            payment_notes = payment_entity.get('notes', {})
+            if isinstance(payment_notes, dict) and payment_notes.get('user_id'):
+                user_id = payment_notes.get('user_id')
+                print(f"DEBUG: Extracted user_id from payment notes: {user_id}")
+            
+            # Also try to get subscription_id from payment entity
+            if payment_entity.get('subscription_id'):
+                subscription_id = payment_entity.get('subscription_id')
+                print(f"DEBUG: Extracted subscription_id from payment entity: {subscription_id}")
+            
+            print(f"DEBUG: Extracted payment_id: {payment_id}, invoice_id: {invoice_id}, order_id: {order_id}")
+        
+        # Extract subscription data - try multiple paths
+        # Path 1: payload.subscription.entity (nested structure)
         subscription_entity = payload_obj.get('subscription', {}).get('entity', {})
-        if subscription_entity:
+        
+        # Path 2: If nested structure is empty, try direct subscription object
+        if not subscription_entity or not subscription_entity.get('id'):
+            subscription_entity = payload_obj.get('subscription', {})
+        
+        if subscription_entity and subscription_entity.get('id'):
             subscription_id = subscription_entity.get('id')
-            # Try to get user_id from subscription notes
-            notes = subscription_entity.get('notes', {})
-            if isinstance(notes, dict):
-                user_id = notes.get('user_id')
+            
+            # Try to get user_id from subscription notes (overrides payment user_id if present)
+            subscription_notes = subscription_entity.get('notes', {})
+            if isinstance(subscription_notes, dict) and subscription_notes.get('user_id'):
+                user_id = subscription_notes.get('user_id')
+                print(f"DEBUG: Extracted user_id from subscription notes: {user_id}")
+            
+            print(f"DEBUG: Extracted subscription_id: {subscription_id}")
+        
+        # Fallback 1: If still no user_id or subscription_id, try to find from database using subscription_id
+        if subscription_id and not user_id:
+            from app.models.subscription import Subscription
+            sub = Subscription.query.filter_by(razorpay_subscription_id=subscription_id).first()
+            if sub:
+                user_id = sub.user_id
+                print(f"DEBUG: Found user_id {user_id} from database using subscription_id")
+        
+        # Fallback 2: If we have payment_id but no subscription_id, search for related subscription events
+        # Payment events (payment.authorized, payment.captured) come BEFORE subscription.charged
+        # But subscription.charged includes BOTH payment and subscription data
+        # So we search for a subscription event with the same payment_id
+        if payment_id and not subscription_id:
+            print(f"DEBUG: Searching for subscription using payment_id: {payment_id}")
+            # Search in webhook_events for subscription.charged or subscription.activated with this payment_id
+            related_event = WebhookEvent.query.filter(
+                WebhookEvent.payment_id == payment_id,
+                WebhookEvent.subscription_id.isnot(None)
+            ).first()
+            
+            if related_event:
+                subscription_id = related_event.subscription_id
+                user_id = related_event.user_id
+                print(f"DEBUG: Found subscription_id {subscription_id} and user_id {user_id} from related webhook event")
+        
+        # Fallback 3: If still no subscription_id/user_id, try to find by invoice_id
+        # The invoice_id links payment to subscription
+        if invoice_id and (not subscription_id or not user_id):
+            print(f"DEBUG: Searching for subscription using invoice_id pattern: {invoice_id}")
+            from app.models.subscription import Subscription
+            
+            # Search recent subscriptions and check if invoice_id appears in their webhook events
+            recent_webhook = WebhookEvent.query.filter(
+                WebhookEvent.payload.like(f'%{invoice_id}%'),
+                WebhookEvent.subscription_id.isnot(None)
+            ).first()
+            
+            if recent_webhook:
+                if not subscription_id:
+                    subscription_id = recent_webhook.subscription_id
+                if not user_id:
+                    user_id = recent_webhook.user_id
+                print(f"DEBUG: Found subscription_id {subscription_id} and user_id {user_id} using invoice_id search")
+        
+        print(f"DEBUG: Final extracted values - Event: {event_type}, Payment ID: {payment_id}, Subscription ID: {subscription_id}, User ID: {user_id}")
+
         
         # Create webhook event record
         webhook_event = WebhookEvent(
@@ -107,8 +190,11 @@ def store_webhook_event(event_data, signature):
         
     except Exception as e:
         print(f"ERROR: Failed to store webhook event: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.session.rollback()
         return None
+
 
 
 def process_payment_authorized(event_data, webhook_event):
