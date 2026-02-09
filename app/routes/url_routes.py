@@ -36,16 +36,16 @@ def get_location_from_ip(ip: str | None) -> dict:
         if data.get("success"):
             return {
                 "country": data.get("country", "Unknown"),
-
+ 
                 "region": data.get("region", "Unknown"),
-
+ 
                 "city": data.get("city", "Unknown"),
             }
     except Exception:
         pass
-
+ 
     return {"country": "Unknown", "region": "Unknown", "city": "Unknown"}
-
+ 
 def _shorten_url() -> str:
     chars = string.ascii_letters + string.digits
     while True:
@@ -55,7 +55,7 @@ def _shorten_url() -> str:
             return rand_chars
  
  
-
+ 
  
  
 def absolute_qr_path(rel_path: str) -> str:
@@ -74,41 +74,44 @@ def absolute_qr_path(rel_path: str) -> str:
 @token_required
 def create(current_user):
     data = request.get_json() or {}
-
+ 
     long_url = (data.get("long_url") or "").strip()
     custom_short = (data.get("custom") or "").strip()
     generate_qr = bool(data.get("generate_qr", False))
     title = (data.get("title") or "").strip()
-
+ 
     if not long_url:
         return api_response(False, "long_url is required", None)
-
+ 
     parsed = urlparse(long_url)
     if not parsed.scheme:
         long_url = "https://" + long_url
-
+ 
     # -----------------------------
     # SUBSCRIPTION LIMIT CHECKS (CONSUMPTION BASED)
     # -----------------------------
     plan = current_user.plan
-
+ 
     if plan:
         # 1. Consumption Limit: Usage Links
         # Always check link limit because a link is ALWAYS created
-        if plan.max_links != -1 and current_user.usage_links >= plan.max_links:
-              return api_response(False, f"Link creation limit reached ({plan.max_links}). Upgrade to get more.", None)
-
+        limit_links = current_user.get_limit('max_links')
+        if limit_links != -1 and current_user.usage_links >= limit_links:
+              return api_response(False, f"Link creation limit reached ({limit_links}). Upgrade to get more.", None)
+ 
         # 2. Custom Slug Limit
         if custom_short:
             current_custom_count = Urls.query.filter_by(user_id=current_user.id, is_custom=True).count()
-            if current_custom_count >= plan.max_custom_links:
-                return api_response(False, f"Custom link limit reached ({plan.max_custom_links}). Please upgrade.", None)
-
+            limit_custom = current_user.get_limit('max_custom_links')
+            if current_custom_count >= limit_custom:
+                return api_response(False, f"Custom link limit reached ({limit_custom}). Please upgrade.", None)
+ 
         # 3. Consumption Limit: Usage QRs
         if generate_qr:
-            if plan.max_qrs != -1 and current_user.usage_qrs >= plan.max_qrs:
-                return api_response(False, f"QR code limit reached ({plan.max_qrs}). Please upgrade.", None)
-
+            limit_qrs = current_user.get_limit('max_qrs')
+            if limit_qrs != -1 and current_user.usage_qrs >= limit_qrs:
+                return api_response(False, f"QR code limit reached ({limit_qrs}). Please upgrade.", None)
+ 
     # Short code logic
     is_custom_flag = False
     if custom_short:
@@ -120,33 +123,33 @@ def create(current_user):
         is_custom_flag = True
     else:
         short_code = _shorten_url()
-
+ 
     base_url = current_app.config.get("BASE_URL")
     short_full = f"{base_url}/{short_code}"
-
+ 
     # Optional QR code generation
     qr_path = None
     if generate_qr:
         # Defaults for 'create' endpoint
         c_logo_data = None
         c_logo_path = None
-        
+       
         # Enforce default logo for Free plan
-        if plan and not plan.allow_qr_styling:
+        if plan and not current_user.get_limit('allow_qr_styling'):
              default_logo = os.path.join(current_app.static_folder or "static", "image.png")
              if os.path.exists(default_logo):
                   c_logo_path = default_logo
-        
-        
+       
+       
         qr_path = generate_styled_qr(short_code, color_dark="#000000", style="square", logo_data=c_logo_data, logo_path=c_logo_path)
-
+ 
         # -----------------------------
         # LOGO USAGE CHECK
         # -----------------------------
         # If c_logo_path is NOT the default one, and we are not forcing default, it means user used a custom logo?
         # Actually in CREATE endpoint, we don't support custom logo upload yet from the UI shown in snippets,
         # but if we did/will:
-        # For now, create endpoint primarily uses default logo if plan allows styling is false. 
+        # For now, create endpoint primarily uses default logo if plan allows styling is false.
         # But if plan allows styling, user might want custom logo.
         # IF the Logic above `c_logo_data = None` implies no custom logo is passed in `create` currently?
         # Awaiting user clarification or inspection of `create.ts`.
@@ -155,14 +158,14 @@ def create(current_user):
         # `c_logo_data = None` is hardcoded at line 132.
         # So `create` endpoint NEVER consumes "Logo Quota" currently.
         # I will leave this as is for now unless I see logo upload code.
-
-
+ 
+ 
     # Save to DB only
-    
+   
     # Allow frontend to pass plan_name (explicitly requested flow)
     req_plan_name = data.get("plan_name")
     final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'Free')
-
+ 
     new_url = Urls(
         long=long_url,
         short=short_code,
@@ -173,32 +176,32 @@ def create(current_user):
         plan_name=final_plan_name
     )
     db.session.add(new_url)
-
+ 
     # INCREMENT USAGE COUNTERS
     # Always increment link usage
     current_user.usage_links = (current_user.usage_links or 0) + 1
-
+ 
     # If QR was also generated, increment QR usage too
     if generate_qr:
          current_user.usage_qrs = (current_user.usage_qrs or 0) + 1
-    
+   
     db.session.add(current_user)
     db.session.commit()
-
+ 
     # ❌ No Redis write here
-
+ 
     result = {
         "title": title,
         "long_url": long_url,
         "short_url": short_full,
         "created_at": new_url.created_at.isoformat()
     }
-
+ 
     if qr_path:
         result["qr_code"] = build_static_url(qr_path)
-
+ 
     return api_response(True, "Short URL created successfully.", result)
-
+ 
  
  
  
@@ -247,7 +250,7 @@ def redirection(short_url):
                 extensions.redis_client.setex(
                     f"short:{url_entry.short}",
                  # f"short:{short_url}",
-
+ 
                     ttl,
                     json.dumps({"long": long_url, "id": url_id})
                 )
@@ -296,18 +299,18 @@ def redirection(short_url):
     if any(b in user_agent_str.lower() for b in bot_keywords):
         print(f">>> BOT skipped: {user_agent_str}")
         return redirect(long_url, code=302)
-    
-#added these for double hits come at a time in mobile 
-
+   
+#added these for double hits come at a time in mobile
+ 
     try:
         if extensions.redis_client:
             ua_hash = hash(user_agent_str)
             debounce_key = f"click:{short_url}:{ip_address}:{ua_hash}"
-
+ 
             # duplicate click → don't count again
             if extensions.redis_client.get(debounce_key):
                 return redirect(long_url, code=302)
-
+ 
             # block duplicates for 2 seconds
             extensions.redis_client.setex(debounce_key, 2, "1")
     except:
@@ -360,17 +363,17 @@ def get_analytics(current_user, short_url):
     # -----------------------------
     plan = current_user.plan
     if plan:
-        if not plan.allow_analytics:
+        if not current_user.get_limit('allow_analytics'):
             return api_response(False, "Analytics not allowed on your plan. Please upgrade.", None)
-
+ 
     clicks = UrlAnalytics.query.filter_by(url_id=url_entry.id_).order_by(UrlAnalytics.timestamp.desc()).all()
    
     qr_clicks = sum(1 for c in clicks if c.source == "qr")
     direct_clicks = sum(1 for c in clicks if c.source == "direct")
-
+ 
     # Filter based on Analytics Level
-    analytics_level = plan.analytics_level if plan else 'none'
-    
+    analytics_level = current_user.get_limit('analytics_level') if plan else 'none'
+   
     click_data = []
     for c in clicks:
         item = {
@@ -382,7 +385,7 @@ def get_analytics(current_user, short_url):
             # Basic fields (Pro/Premium)
             "country": c.country if analytics_level in ['basic', 'detailed'] else None,
         }
-        
+       
         # Detailed fields (Premium only)
         if analytics_level == 'detailed':
             item.update({
@@ -392,7 +395,7 @@ def get_analytics(current_user, short_url):
                 "region": c.region,
                 "city": c.city,
             })
-            
+           
         click_data.append(item)
    
     return api_response(True, "Analytics fetched", {
@@ -418,21 +421,21 @@ def display_user_info(current_user):
             "name": plan.name,
             "prices": {"usd": plan.price_usd, "inr": plan.price_inr},
             "limits": {
-                "max_links": plan.max_links,
-                "max_qrs": plan.max_qrs,
-                "max_custom_links": plan.max_custom_links,
-                "max_qr_with_logo": plan.max_qr_with_logo,
-                "max_editable_links": plan.max_editable_links
+                "max_links": current_user.get_limit("max_links"),
+                "max_qrs": current_user.get_limit("max_qrs"),
+                "max_custom_links": current_user.get_limit("max_custom_links"),
+                "max_qr_with_logo": current_user.get_limit("max_qr_with_logo"),
+                "max_editable_links": current_user.get_limit("max_editable_links")
             },
             "permissions": {
-                "allow_qr_styling": plan.allow_qr_styling,
-                "allow_analytics": plan.allow_analytics,
-                "show_individual_stats": plan.show_individual_stats,
-                "allow_api_access": plan.allow_api_access,
-                "analytics_level": plan.analytics_level
+                "allow_qr_styling": current_user.get_limit("allow_qr_styling"),
+                "allow_analytics": current_user.get_limit("allow_analytics"),
+                "show_individual_stats": current_user.get_limit("show_individual_stats"),
+                "allow_api_access": current_user.get_limit("allow_api_access"),
+                "analytics_level": current_user.get_limit("analytics_level")
             }
         }
-
+ 
     return api_response(True, "user Details", {
         "user": {
             "id": current_user.id,
@@ -442,8 +445,8 @@ def display_user_info(current_user):
             "organization": current_user.organization,
             "password": current_user.password,
             "phone": current_user.phone,
-            "client_id": current_user.client_id if (plan and plan.allow_api_access) else None,
-            "client_secret": current_user.client_secret if (plan and plan.allow_api_access) else None,
+            "client_id": current_user.client_id if (plan and current_user.get_limit('allow_api_access')) else None,
+            "client_secret": current_user.client_secret if (plan and current_user.get_limit('allow_api_access')) else None,
             "created_at": current_user.created_at.isoformat(),
             "usage_links": current_user.usage_links or 0,
             "usage_qrs": current_user.usage_qrs or 0,
@@ -662,36 +665,38 @@ def get_url_details(current_user, short_url):
 @token_required
 def edit_short_url(current_user):
     import os
-
+ 
     try:
         data = request.get_json()
         old_short = data.get("old_short")
         new_short = data.get("new_short")
-
+ 
         if not old_short or not new_short:
             return api_response(False, "Missing fields", None)
-
+ 
         if not new_short.isalnum():
             return api_response(False, "Short code must be alphanumeric", None)
-
+ 
         if Urls.query.filter_by(short=new_short).first():
             return api_response(False, "Short URL already exists", None)
-
+ 
         url = Urls.query.filter_by(short=old_short, user_id=current_user.id).first()
         if not url:
             return api_response(False, "Old short URL not found", None)
-
+ 
         # -----------------------------
         # SUBSCRIPTION EDIT LIMIT
         # -----------------------------
-        if current_user.plan and current_user.plan.max_editable_links != -1:
-             if not url.is_edited:
-                 edited_count = Urls.query.filter_by(user_id=current_user.id, is_edited=True).count()
-                 if edited_count >= current_user.plan.max_editable_links:
-                      return api_response(False, f"Edit limit reached ({current_user.plan.max_editable_links}). Upgrade to edit more links.", None)
-
+        if current_user.plan:
+             limit_editable = current_user.get_limit('max_editable_links')
+             if limit_editable != -1:
+                 if not url.is_edited:
+                     edited_count = Urls.query.filter_by(user_id=current_user.id, is_edited=True).count()
+                     if edited_count >= limit_editable:
+                          return api_response(False, f"Edit limit reached ({limit_editable}). Upgrade to edit more links.", None)
+ 
         base_url = current_app.config.get("BASE_URL")
-
+ 
         # CASE 1: URL HAS QR → regenerate
         if url.qr_code:
             old_qr_path = absolute_qr_path(url.qr_code)
@@ -700,18 +705,18 @@ def edit_short_url(current_user):
                     os.remove(old_qr_path)
                 except:
                     pass
-            
+           
             # Determine logo source
             r_logo_data = url.logo
             r_logo_path = None
-            
-            if current_user.plan and not current_user.plan.allow_qr_styling:
+           
+            if current_user.plan and not current_user.get_limit('allow_qr_styling'):
                  # Enforce default logo
                  default_logo = os.path.join(current_app.static_folder or "static", "image.png")
                  if os.path.exists(default_logo):
                       r_logo_path = default_logo
                  r_logo_data = None
-
+ 
             static_rel = generate_styled_qr(
                 short_code=new_short,
                 color_dark=url.color_dark or "#000000",
@@ -719,19 +724,19 @@ def edit_short_url(current_user):
                 logo_data=r_logo_data,
                 logo_path=r_logo_path
             )
-            
+           
             # Increment usage if this is the first edit
             if not url.is_edited:
                  current_user.usage_editable_links = (current_user.usage_editable_links or 0) + 1
                  db.session.add(current_user)
-
+ 
             # Update DB
             url.short = new_short
             url.qr_code = static_rel
             url.is_edited = True
             db.session.commit()
-        
-            
+       
+           
        
             # NEW ✔ Delete old key from Redis
             try:
@@ -739,34 +744,34 @@ def edit_short_url(current_user):
                     extensions.redis_client.delete(f"short:{old_short}")
             except:
                 pass
-
+ 
             return api_response(True, "Short URL updated (QR regenerated)", {
                 "newShortUrl": f"{base_url}/{new_short}",
                 "newQrCode": build_static_url(static_rel)
             })
-
+ 
         # CASE 2: No QR → simple update
         else:
             url.short = new_short
             url.is_edited = True
             db.session.commit()
-
+ 
             # NEW ✔ Delete old key from Redis
             try:
                 if extensions.redis_client:
                     extensions.redis_client.delete(f"short:{old_short}")
             except:
                 pass
-
+ 
             return api_response(True, "Short URL updated successfully", {
                 "newShortUrl": f"{base_url}/{new_short}"
             })
-
+ 
     except Exception as e:
         db.session.rollback()
         return api_response(False, str(e), None)
-
-
+ 
+ 
  
  
  
@@ -837,9 +842,9 @@ def delete_account(current_user):
 def generate_qr(current_user):
     import uuid, os, io, base64, json
     from urllib.parse import urlparse
-
+ 
     data = request.get_json(silent=True) or {}
-
+ 
     long_url = (data.get("long_url") or "").strip()
     show_short = bool(data.get("generate_short", False))
     color_dark = (data.get("color_dark") or "#000000").strip()
@@ -847,41 +852,45 @@ def generate_qr(current_user):
     custom_short = (data.get("custom") or "").strip()
     logo_data = data.get("logo")
     title = (data.get("title") or "").strip()
-
+ 
     if not long_url:
         return api_response(False, "long_url is required", None)
-
+ 
     parsed = urlparse(long_url)
     if not parsed.scheme:
         long_url = "https://" + long_url
-
+ 
     # -----------------------------
     # SUBSCRIPTION LIMIT CHECK (CONSUMPTION STRICT)
     # -----------------------------
     plan = current_user.plan
     if plan:
         # 1. QR Limit (Always)
-        if plan.max_qrs != -1 and current_user.usage_qrs >= plan.max_qrs:
-             return api_response(False, f"QR code limit reached ({plan.max_qrs}). Please upgrade.", None)
-        
+        limit_qrs = current_user.get_limit('max_qrs')
+        if limit_qrs != -1 and current_user.usage_qrs >= limit_qrs:
+             return api_response(False, f"QR code limit reached ({limit_qrs}). Please upgrade.", None)
+       
         # 2. Link Limit (Only if generate_short is requested)
         if show_short:
-             if plan.max_links != -1 and current_user.usage_links >= plan.max_links:
-                  return api_response(False, f"Link creation limit reached ({plan.max_links}). Upgrade to use Short Link feature with QR.", None)
-        
+             limit_links = current_user.get_limit('max_links')
+             if limit_links != -1 and current_user.usage_links >= limit_links:
+                  return api_response(False, f"Link creation limit reached ({limit_links}). Upgrade to use Short Link feature with QR.", None)
+       
         # 3. Logo Limit (If logo is provided)
         if logo_data:
-             if plan.max_qr_with_logo != -1 and current_user.usage_qr_with_logo >= plan.max_qr_with_logo:
-                  return api_response(False, f"Logo limit reached ({plan.max_qr_with_logo}). You can only create {plan.max_qr_with_logo} QRs with custom logos.", None)
-        
+             limit_logo = current_user.get_limit('max_qr_with_logo')
+             if limit_logo != -1 and current_user.usage_qr_with_logo >= limit_logo:
+                  return api_response(False, f"Logo limit reached ({limit_logo}). You can only create {limit_logo} QRs with custom logos.", None)
+       
         # 3. Custom Slug Limit (if applicable)
         if custom_short:
             current_custom_count = Urls.query.filter_by(user_id=current_user.id, is_custom=True).count()
-            if current_custom_count >= plan.max_custom_links:
-                return api_response(False, f"Custom link limit reached ({plan.max_custom_links}). Please upgrade.", None)
-
+            limit_custom = current_user.get_limit('max_custom_links')
+            if current_custom_count >= limit_custom:
+                return api_response(False, f"Custom link limit reached ({limit_custom}). Please upgrade.", None)
+ 
     base_url = current_app.config.get("BASE_URL")
-
+ 
     # Short code logic
     if custom_short:
         if not custom_short.isalnum():
@@ -891,31 +900,31 @@ def generate_qr(current_user):
         short_code = custom_short
     else:
         short_code = _shorten_url()
-
+ 
     # QR encodes short URL
     # (Removed manual QR generation code block)
-
+ 
     # Defaults
     logo_path_arg = None
-    
+   
     # Enforce default logo for Free plan (or if styling not allowed)
-    if plan and not plan.allow_qr_styling:
+    if plan and not current_user.get_limit('allow_qr_styling'):
         # User cannot customize style or logo, but we enforce the default branding
         default_logo = os.path.join(current_app.static_folder or "static", "image.png")
         if os.path.exists(default_logo):
              logo_path_arg = default_logo
         # Ensure custom logo is ignored
         logo_data = None
-    
+   
     # Use shared utility
     static_rel = generate_styled_qr(short_code, color_dark, style, logo_data, logo_path=logo_path_arg)
-    
+   
     # Save to DB only
-    
+   
     # Allow frontend to pass plan_name
     req_plan_name = data.get("plan_name")
     final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'Free')
-
+ 
     new_url = Urls(
         long=long_url,
         short=short_code,
@@ -930,27 +939,27 @@ def generate_qr(current_user):
         is_edited=False,
         plan_name=final_plan_name
     )
-
+ 
     db.session.add(new_url)
-    
+   
     # INCREMENT USAGE
     # Always increment QR usage
     current_user.usage_qrs = (current_user.usage_qrs or 0) + 1
-    
+   
     # If Short URL was requested (checkbox), increment Link usage too
     if show_short:
         current_user.usage_links = (current_user.usage_links or 0) + 1
-
+ 
     # If Logo was used, increment Logo usage
     if logo_data:
         current_user.usage_qr_with_logo = (current_user.usage_qr_with_logo or 0) + 1
-        
+       
     db.session.add(current_user)
-
+ 
     db.session.commit()
-
+ 
     # ❌ Do NOT write to Redis
-
+ 
     data = {
         "title": title,
         "long_url": long_url,
@@ -958,14 +967,14 @@ def generate_qr(current_user):
         "created_at": new_url.created_at.isoformat(),
         "show_short": show_short,
     }
-
+ 
     if show_short:
         data["short_url"] = f"{base_url}/{short_code}"
-
+ 
     return api_response(True, "QR code generated successfully.", data)
-
-
-
+ 
+ 
+ 
  
 @url_bp.route('/test-ip', methods=['POST'])
 def test_ip():
@@ -990,5 +999,6 @@ def test_ip():
         "region": location.get("region"),
         "city": location.get("city")
     })
+ 
  
  
