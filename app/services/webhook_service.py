@@ -413,12 +413,13 @@ def process_subscription_cancelled(event_data, webhook_event):
                     if free_plan:
                         user.plan_id = free_plan.id
                         user.custom_limits = None
-                        # Reset usage counters
-                        user.usage_links = 0
-                        user.usage_qrs = 0
-                        user.usage_qr_with_logo = 0
-                        user.usage_editable_links = 0
-                        print(f"DEBUG: Downgraded user {user.id} to Free plan after cancellation")
+                        # Set usage counters to Free plan limits (not zero)
+                        # This gives users the full Free plan quota
+                        user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
+                        user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
+                        user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
+                        user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
+                        print(f"DEBUG: Downgraded user {user.id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
                 
                 db.session.commit()
                 print(f"DEBUG: Cancelled subscription {subscription_id}")

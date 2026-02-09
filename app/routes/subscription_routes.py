@@ -297,6 +297,46 @@ def create_plan_and_subscription(current_user):
                 db.session.commit()
                 print(f"DEBUG: Created new plan {razorpay_plan_id} for {plan_name}")
 
+            # ============================================================================
+            # CANCEL EXISTING ACTIVE SUBSCRIPTION BEFORE UPGRADE
+            # ============================================================================
+            # Check if user has any active subscription (not Pending, not Cancelled)
+            existing_active_sub = Subscription.query.filter_by(
+                user_id=current_user.id,
+                is_active=True
+            ).filter(
+                Subscription.subscription_status.in_(['Active', 'Authenticated'])
+            ).first()
+
+            if existing_active_sub:
+                print(f"DEBUG: Found existing active subscription {existing_active_sub.razorpay_subscription_id}, cancelling before upgrade")
+                
+                # Cancel the existing subscription in Razorpay (immediate cancellation for upgrades)
+                cancel_success, cancel_response = _call_razorpay_cancel_api(
+                    existing_active_sub.razorpay_subscription_id, 
+                    cancel_at_cycle_end=False  # Immediate cancellation for upgrades
+                )
+                
+                if cancel_success:
+                    # Create history record for the cancelled subscription
+                    _create_subscription_history(existing_active_sub, 'Upgrade to New Plan')
+                    
+                    # Update the existing subscription status
+                    existing_active_sub.subscription_status = 'Cancelled'
+                    existing_active_sub.is_active = False
+                    existing_active_sub.updated_date = datetime.datetime.utcnow()
+                    
+                    db.session.commit()
+                    print(f"DEBUG: Successfully cancelled existing subscription {existing_active_sub.razorpay_subscription_id}")
+                else:
+                    # Log warning but continue with upgrade (user might have manually cancelled)
+                    print(f"WARNING: Failed to cancel existing subscription in Razorpay: {cancel_response}")
+                    # Still update local status
+                    existing_active_sub.subscription_status = 'Cancelled'
+                    existing_active_sub.is_active = False
+                    existing_active_sub.updated_date = datetime.datetime.utcnow()
+                    db.session.commit()
+
             # Check for existing PENDING subscription to reuse
             existing_sub = Subscription.query.filter_by(
                 user_id=current_user.id,
@@ -618,13 +658,14 @@ def _downgrade_user_to_free(user_id):
         user.plan_id = free_plan.id
         user.custom_limits = None
         
-        # Reset usage counters
-        user.usage_links = 0
-        user.usage_qrs = 0
-        user.usage_qr_with_logo = 0
-        user.usage_editable_links = 0
+        # Set usage counters to Free plan limits (not zero)
+        # This gives users the full Free plan quota
+        user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
+        user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
+        user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
+        user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
         
-        print(f"DEBUG: Downgraded user {user_id} to Free plan")
+        print(f"DEBUG: Downgraded user {user_id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
         return True
         
     except Exception as e:
