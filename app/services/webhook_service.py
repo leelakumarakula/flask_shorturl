@@ -6,6 +6,7 @@ from flask import current_app
 from app.extensions import db
 from app.models.webhook_events import WebhookEvent
 from app.models.subscription import Subscription, RazorpaySubscriptionPlan
+from app.models.subscription_history import SubscriptionHistory
 from app.models.user import User
 from app.models.plan import Plan
 from app.models.billing_info import BillingInfo
@@ -379,9 +380,46 @@ def process_subscription_cancelled(event_data, webhook_event):
         if subscription_id:
             sub = Subscription.query.filter_by(razorpay_subscription_id=subscription_id).first()
             if sub:
+                # Create subscription history record before updating
+                try:
+                    history = SubscriptionHistory(
+                        subscription_id=sub.razorpay_subscription_id,
+                        user_id=sub.user_id,
+                        razorpay_plan_id=sub.razorpay_plan_id,
+                        plan_amount=sub.plan_amount,
+                        cancelled_date=datetime.datetime.utcnow(),
+                        cancelled_reason='Webhook Cancellation',
+                        subscription_start_date=sub.subscription_start_date,
+                        subscription_end_date=sub.subscription_end_date,
+                        is_active=True,
+                        card_id=sub.card_id,
+                        total_count=sub.total_count,
+                        notes=sub.notes
+                    )
+                    db.session.add(history)
+                    print(f"DEBUG: Created subscription history for {subscription_id}")
+                except Exception as e:
+                    print(f"WARNING: Failed to create subscription history: {str(e)}")
+                
+                # Update subscription status
                 sub.subscription_status = 'Cancelled'
                 sub.is_active = False
                 sub.updated_date = datetime.datetime.utcnow()
+                
+                # Downgrade user to Free plan
+                user = User.query.get(sub.user_id)
+                if user:
+                    free_plan = Plan.query.filter_by(name='Free').first()
+                    if free_plan:
+                        user.plan_id = free_plan.id
+                        user.custom_limits = None
+                        # Reset usage counters
+                        user.usage_links = 0
+                        user.usage_qrs = 0
+                        user.usage_qr_with_logo = 0
+                        user.usage_editable_links = 0
+                        print(f"DEBUG: Downgraded user {user.id} to Free plan after cancellation")
+                
                 db.session.commit()
                 print(f"DEBUG: Cancelled subscription {subscription_id}")
        

@@ -98,6 +98,7 @@ def create_app() -> Flask:
         from app.models.subscription import RazorpaySubscriptionPlan, Subscription
         from app.models.billing_info import BillingInfo
         from app.models.webhook_events import WebhookEvent
+        from app.models.subscription_history import SubscriptionHistory
         db.create_all()
  
     return app

@@ -3,6 +3,7 @@ import json
 from app.extensions import db
 from app.models.subscription import RazorpaySubscriptionPlan, Subscription
 from app.models.subscription import RazorpaySubscriptionPlan, Subscription
+from app.models.subscription_history import SubscriptionHistory
 from app.models.user import User
 from app.models.plan import Plan
 from app.models.webhook_events import WebhookEvent
@@ -512,3 +513,267 @@ def save_billing_info(current_user):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR SUBSCRIPTION CANCELLATION
+# ============================================================================
+
+def _call_razorpay_cancel_api(subscription_id, cancel_at_cycle_end=True):
+    """
+    Call Razorpay API to cancel a subscription
+    
+    Args:
+        subscription_id: Razorpay subscription ID
+        cancel_at_cycle_end: If True, cancel at end of billing cycle. If False, cancel immediately.
+    
+    Returns:
+        tuple: (success: bool, response_data: dict or error_message: str)
+    """
+    try:
+        razorpay_key_id = current_app.config.get('RAZORPAY_KEY_ID')
+        razorpay_key_secret = current_app.config.get('RAZORPAY_KEY_SECRET')
+
+        if not razorpay_key_id or not razorpay_key_secret:
+            return False, 'Razorpay credentials not configured'
+
+        url = f"https://api.razorpay.com/v1/subscriptions/{subscription_id}/cancel"
+        
+        payload = {
+            "cancel_at_cycle_end": cancel_at_cycle_end
+        }
+
+        response = requests.post(
+            url,
+            json=payload,
+            auth=(razorpay_key_id, razorpay_key_secret)
+        )
+
+        if response.status_code == 200:
+            return True, response.json()
+        else:
+            error_data = response.json() if response.text else {'error': 'Unknown error'}
+            return False, error_data
+
+    except Exception as e:
+        return False, str(e)
+
+
+def _create_subscription_history(subscription, reason='User Requested'):
+    """
+    Create a subscription history record from an existing subscription
+    
+    Args:
+        subscription: Subscription object
+        reason: Reason for cancellation
+    
+    Returns:
+        SubscriptionHistory object
+    """
+    try:
+        history = SubscriptionHistory(
+            subscription_id=subscription.razorpay_subscription_id,
+            user_id=subscription.user_id,
+            razorpay_plan_id=subscription.razorpay_plan_id,
+            plan_amount=subscription.plan_amount,
+            cancelled_date=datetime.datetime.utcnow(),
+            cancelled_reason=reason,
+            subscription_start_date=subscription.subscription_start_date,
+            subscription_end_date=subscription.subscription_end_date,
+            is_active=True,
+            card_id=subscription.card_id,
+            total_count=subscription.total_count,
+            notes=subscription.notes
+        )
+        
+        db.session.add(history)
+        return history
+    except Exception as e:
+        print(f"ERROR: Failed to create subscription history: {str(e)}")
+        raise
+
+
+def _downgrade_user_to_free(user_id):
+    """
+    Downgrade user to Free plan and reset usage counters
+    
+    Args:
+        user_id: User ID to downgrade
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return False
+        
+        # Find Free plan
+        free_plan = Plan.query.filter_by(name='Free').first()
+        if not free_plan:
+            print("WARNING: Free plan not found in database")
+            return False
+        
+        # Update user plan
+        user.plan_id = free_plan.id
+        user.custom_limits = None
+        
+        # Reset usage counters
+        user.usage_links = 0
+        user.usage_qrs = 0
+        user.usage_qr_with_logo = 0
+        user.usage_editable_links = 0
+        
+        print(f"DEBUG: Downgraded user {user_id} to Free plan")
+        return True
+        
+    except Exception as e:
+        print(f"ERROR: Failed to downgrade user: {str(e)}")
+        return False
+
+
+# ============================================================================
+# CANCEL SUBSCRIPTION ENDPOINTS
+# ============================================================================
+
+@subscription_bp.route('/cancel_subscription', methods=['POST'])
+@token_required
+def cancel_subscription(current_user):
+    """
+    Cancel a subscription immediately or at cycle end
+    
+    Request Body:
+        razorpay_subscription_id: Razorpay subscription ID
+        cancel_at_cycle_end: (optional) True to cancel at cycle end, False for immediate (default: True)
+        cancelled_reason: (optional) Reason for cancellation (default: 'User Requested')
+    """
+    try:
+        data = request.get_json()
+        subscription_id = data.get('razorpay_subscription_id')
+        cancel_at_cycle_end = data.get('cancel_at_cycle_end', True)
+        cancelled_reason = data.get('cancelled_reason', 'User Requested')
+
+        if not subscription_id:
+            return jsonify({'error': 'Missing razorpay_subscription_id'}), 400
+
+        # Find subscription in database
+        subscription = Subscription.query.filter_by(
+            razorpay_subscription_id=subscription_id,
+            user_id=current_user.id
+        ).first()
+
+        if not subscription:
+            return jsonify({'error': 'Subscription not found'}), 404
+
+        # Check if already cancelled
+        if subscription.subscription_status == 'Cancelled':
+            return jsonify({'error': 'Subscription already cancelled'}), 400
+
+        # Call Razorpay API to cancel subscription
+        success, response_data = _call_razorpay_cancel_api(subscription_id, cancel_at_cycle_end)
+
+        if not success:
+            return jsonify({
+                'error': 'Failed to cancel subscription with Razorpay',
+                'details': response_data
+            }), 500
+
+        # Create subscription history record
+        _create_subscription_history(subscription, cancelled_reason)
+
+        # Update subscription status
+        subscription.subscription_status = 'Cancelled'
+        subscription.is_active = False
+        subscription.updated_date = datetime.datetime.utcnow()
+
+        # If immediate cancellation, downgrade user to Free plan
+        if not cancel_at_cycle_end:
+            _downgrade_user_to_free(current_user.id)
+
+        db.session.commit()
+
+        print(f"DEBUG: Cancelled subscription {subscription_id} for user {current_user.id}")
+
+        return jsonify({
+            'message': 'Subscription cancelled successfully',
+            'subscription_id': subscription_id,
+            'cancel_at_cycle_end': cancel_at_cycle_end,
+            'razorpay_response': response_data
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERROR: cancel_subscription failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@subscription_bp.route('/subscription_history', methods=['GET'])
+@token_required
+def get_subscription_history(current_user):
+    """
+    Get subscription history for the current user
+    
+    Returns:
+        List of subscription history records
+    """
+    try:
+        history_records = SubscriptionHistory.query.filter_by(
+            user_id=current_user.id
+        ).order_by(SubscriptionHistory.cancelled_date.desc()).all()
+
+        return jsonify({
+            'history': [record.to_dict() for record in history_records]
+        }), 200
+
+    except Exception as e:
+        print(f"ERROR: get_subscription_history failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@subscription_bp.route('/active_subscription', methods=['GET'])
+@token_required
+def get_active_subscription(current_user):
+    """
+    Get the current active subscription for the user
+    
+    Returns:
+        Active subscription details or null if no active subscription
+    """
+    try:
+        active_sub = Subscription.query.filter_by(
+            user_id=current_user.id,
+            is_active=True
+        ).order_by(Subscription.created_date.desc()).first()
+
+        if not active_sub:
+            return jsonify({
+                'subscription': None,
+                'message': 'No active subscription found'
+            }), 200
+
+        # Get plan details
+        plan = RazorpaySubscriptionPlan.query.filter_by(
+            razorpay_plan_id=active_sub.razorpay_plan_id
+        ).first()
+
+        subscription_data = {
+            'id': active_sub.id,
+            'razorpay_subscription_id': active_sub.razorpay_subscription_id,
+            'razorpay_plan_id': active_sub.razorpay_plan_id,
+            'plan_name': plan.plan_name if plan else 'Unknown',
+            'plan_amount': active_sub.plan_amount,
+            'subscription_status': active_sub.subscription_status,
+            'subscription_start_date': active_sub.subscription_start_date.isoformat() if active_sub.subscription_start_date else None,
+            'subscription_end_date': active_sub.subscription_end_date.isoformat() if active_sub.subscription_end_date else None,
+            'next_billing_date': active_sub.next_billing_date.isoformat() if active_sub.next_billing_date else None,
+            'created_date': active_sub.created_date.isoformat() if active_sub.created_date else None
+        }
+
+        return jsonify({
+            'subscription': subscription_data
+        }), 200
+
+    except Exception as e:
+        print(f"ERROR: get_active_subscription failed: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
