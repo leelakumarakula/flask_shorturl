@@ -28,6 +28,7 @@ class User(db.Model):
    
     # Custom Limits (JSON) - Overrides Plan Limits
     custom_limits = db.Column(db.Text, nullable=True)
+    permanent_custom_limits = db.Column(db.Boolean, default=False, nullable=False)
  
     def get_limit(self, limit_name):
         """

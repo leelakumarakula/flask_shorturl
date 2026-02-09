@@ -197,6 +197,8 @@ def process_payment_captured(event_data, webhook_event):
                                 user.custom_limits = None
                                 print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
                             else:
+                                if not user.permanent_custom_limits:
+                                    user.custom_limits = None
                                 print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
                    
                     # Update billing info
@@ -313,6 +315,8 @@ def process_subscription_activated(event_data, webhook_event):
                                 user.custom_limits = None
                                 print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
                             else:
+                                if not user.permanent_custom_limits:
+                                    user.custom_limits = None
                                 print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
                    
                     # Update billing info
