@@ -1,4 +1,4 @@
-- Insert Free Plan
+
 -- Insert Free Plan
 INSERT INTO plans (name, price_usd, price_inr, max_links, max_qrs, max_custom_links, max_qr_with_logo, max_editable_links, allow_qr_styling, allow_analytics, show_individual_stats, allow_api_access, analytics_level)
 VALUES ('FREE', 0, 0, 2, 2, 1, 0, 0, 0, 0, 0, 0, 'none');

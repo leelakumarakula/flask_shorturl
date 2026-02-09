@@ -195,11 +195,21 @@ def process_payment_captured(event_data, webhook_event):
                                 user.plan_id = internal_plan.id
                                 # CLEAR Custom Limits on Plan CHANGE only
                                 user.custom_limits = None
-                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
+                                # RESET Usage Counters on Plan CHANGE/UPGRADE
+                                user.usage_links = 0
+                                user.usage_qrs = 0
+                                user.usage_qr_with_logo = 0
+                                user.usage_editable_links = 0
+                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits & Usage Counters Reset)")
                             else:
                                 if not user.permanent_custom_limits:
                                     user.custom_limits = None
-                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
+                                # RESET Usage Counters on Plan RENEWAL
+                                user.usage_links = 0
+                                user.usage_qrs = 0
+                                user.usage_qr_with_logo = 0
+                                user.usage_editable_links = 0
+                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Usage Counters Reset)")
                    
                     # Update billing info
                     billing_info = BillingInfo.query.filter_by(user_id=sub.user_id).order_by(BillingInfo.created_at.desc()).first()
@@ -313,11 +323,21 @@ def process_subscription_activated(event_data, webhook_event):
                                 user.plan_id = internal_plan.id
                                 # CLEAR Custom Limits on Plan CHANGE only
                                 user.custom_limits = None
-                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
+                                # RESET Usage Counters on Plan CHANGE/UPGRADE
+                                user.usage_links = 0
+                                user.usage_qrs = 0
+                                user.usage_qr_with_logo = 0
+                                user.usage_editable_links = 0
+                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits & Usage Counters Reset)")
                             else:
                                 if not user.permanent_custom_limits:
                                     user.custom_limits = None
-                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
+                                # RESET Usage Counters on Plan RENEWAL
+                                user.usage_links = 0
+                                user.usage_qrs = 0
+                                user.usage_qr_with_logo = 0
+                                user.usage_editable_links = 0
+                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Usage Counters Reset)")
                    
                     # Update billing info
                     billing_info = BillingInfo.query.filter_by(user_id=sub.user_id).order_by(BillingInfo.created_at.desc()).first()
