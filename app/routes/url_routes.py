@@ -95,19 +95,22 @@ def create(current_user):
     if plan:
         # 1. Consumption Limit: Usage Links
         # Always check link limit because a link is ALWAYS created
-        if plan.max_links != -1 and current_user.usage_links >= plan.max_links:
-              return api_response(False, f"Link creation limit reached ({plan.max_links}). Upgrade to get more.", None)
+        limit_links = current_user.get_limit('max_links')
+        if limit_links != -1 and current_user.usage_links >= limit_links:
+              return api_response(False, f"Link creation limit reached ({limit_links}). Upgrade to get more.", None)
 
         # 2. Custom Slug Limit
         if custom_short:
             current_custom_count = Urls.query.filter_by(user_id=current_user.id, is_custom=True).count()
-            if current_custom_count >= plan.max_custom_links:
-                return api_response(False, f"Custom link limit reached ({plan.max_custom_links}). Please upgrade.", None)
+            limit_custom = current_user.get_limit('max_custom_links')
+            if current_custom_count >= limit_custom:
+                return api_response(False, f"Custom link limit reached ({limit_custom}). Please upgrade.", None)
 
         # 3. Consumption Limit: Usage QRs
         if generate_qr:
-            if plan.max_qrs != -1 and current_user.usage_qrs >= plan.max_qrs:
-                return api_response(False, f"QR code limit reached ({plan.max_qrs}). Please upgrade.", None)
+            limit_qrs = current_user.get_limit('max_qrs')
+            if limit_qrs != -1 and current_user.usage_qrs >= limit_qrs:
+                return api_response(False, f"QR code limit reached ({limit_qrs}). Please upgrade.", None)
 
     # Short code logic
     is_custom_flag = False
@@ -132,7 +135,7 @@ def create(current_user):
         c_logo_path = None
         
         # Enforce default logo for Free plan
-        if plan and not plan.allow_qr_styling:
+        if plan and not current_user.get_limit('allow_qr_styling'):
              default_logo = os.path.join(current_app.static_folder or "static", "image.png")
              if os.path.exists(default_logo):
                   c_logo_path = default_logo
@@ -360,7 +363,7 @@ def get_analytics(current_user, short_url):
     # -----------------------------
     plan = current_user.plan
     if plan:
-        if not plan.allow_analytics:
+        if not current_user.get_limit('allow_analytics'):
             return api_response(False, "Analytics not allowed on your plan. Please upgrade.", None)
 
     clicks = UrlAnalytics.query.filter_by(url_id=url_entry.id_).order_by(UrlAnalytics.timestamp.desc()).all()
@@ -369,7 +372,7 @@ def get_analytics(current_user, short_url):
     direct_clicks = sum(1 for c in clicks if c.source == "direct")
 
     # Filter based on Analytics Level
-    analytics_level = plan.analytics_level if plan else 'none'
+    analytics_level = current_user.get_limit('analytics_level') if plan else 'none'
     
     click_data = []
     for c in clicks:
@@ -418,18 +421,18 @@ def display_user_info(current_user):
             "name": plan.name,
             "prices": {"usd": plan.price_usd, "inr": plan.price_inr},
             "limits": {
-                "max_links": plan.max_links,
-                "max_qrs": plan.max_qrs,
-                "max_custom_links": plan.max_custom_links,
-                "max_qr_with_logo": plan.max_qr_with_logo,
-                "max_editable_links": plan.max_editable_links
+                "max_links": current_user.get_limit("max_links"),
+                "max_qrs": current_user.get_limit("max_qrs"),
+                "max_custom_links": current_user.get_limit("max_custom_links"),
+                "max_qr_with_logo": current_user.get_limit("max_qr_with_logo"),
+                "max_editable_links": current_user.get_limit("max_editable_links")
             },
             "permissions": {
-                "allow_qr_styling": plan.allow_qr_styling,
-                "allow_analytics": plan.allow_analytics,
-                "show_individual_stats": plan.show_individual_stats,
-                "allow_api_access": plan.allow_api_access,
-                "analytics_level": plan.analytics_level
+                "allow_qr_styling": current_user.get_limit("allow_qr_styling"),
+                "allow_analytics": current_user.get_limit("allow_analytics"),
+                "show_individual_stats": current_user.get_limit("show_individual_stats"),
+                "allow_api_access": current_user.get_limit("allow_api_access"),
+                "analytics_level": current_user.get_limit("analytics_level")
             }
         }
 
@@ -442,8 +445,8 @@ def display_user_info(current_user):
             "organization": current_user.organization,
             "password": current_user.password,
             "phone": current_user.phone,
-            "client_id": current_user.client_id if (plan and plan.allow_api_access) else None,
-            "client_secret": current_user.client_secret if (plan and plan.allow_api_access) else None,
+            "client_id": current_user.client_id if (plan and current_user.get_limit('allow_api_access')) else None,
+            "client_secret": current_user.client_secret if (plan and current_user.get_limit('allow_api_access')) else None,
             "created_at": current_user.created_at.isoformat(),
             "usage_links": current_user.usage_links or 0,
             "usage_qrs": current_user.usage_qrs or 0,
@@ -684,11 +687,13 @@ def edit_short_url(current_user):
         # -----------------------------
         # SUBSCRIPTION EDIT LIMIT
         # -----------------------------
-        if current_user.plan and current_user.plan.max_editable_links != -1:
-             if not url.is_edited:
-                 edited_count = Urls.query.filter_by(user_id=current_user.id, is_edited=True).count()
-                 if edited_count >= current_user.plan.max_editable_links:
-                      return api_response(False, f"Edit limit reached ({current_user.plan.max_editable_links}). Upgrade to edit more links.", None)
+        if current_user.plan:
+             limit_editable = current_user.get_limit('max_editable_links')
+             if limit_editable != -1:
+                 if not url.is_edited:
+                     edited_count = Urls.query.filter_by(user_id=current_user.id, is_edited=True).count()
+                     if edited_count >= limit_editable:
+                          return api_response(False, f"Edit limit reached ({limit_editable}). Upgrade to edit more links.", None)
 
         base_url = current_app.config.get("BASE_URL")
 
@@ -705,7 +710,7 @@ def edit_short_url(current_user):
             r_logo_data = url.logo
             r_logo_path = None
             
-            if current_user.plan and not current_user.plan.allow_qr_styling:
+            if current_user.plan and not current_user.get_limit('allow_qr_styling'):
                  # Enforce default logo
                  default_logo = os.path.join(current_app.static_folder or "static", "image.png")
                  if os.path.exists(default_logo):
@@ -861,24 +866,28 @@ def generate_qr(current_user):
     plan = current_user.plan
     if plan:
         # 1. QR Limit (Always)
-        if plan.max_qrs != -1 and current_user.usage_qrs >= plan.max_qrs:
-             return api_response(False, f"QR code limit reached ({plan.max_qrs}). Please upgrade.", None)
+        limit_qrs = current_user.get_limit('max_qrs')
+        if limit_qrs != -1 and current_user.usage_qrs >= limit_qrs:
+             return api_response(False, f"QR code limit reached ({limit_qrs}). Please upgrade.", None)
         
         # 2. Link Limit (Only if generate_short is requested)
         if show_short:
-             if plan.max_links != -1 and current_user.usage_links >= plan.max_links:
-                  return api_response(False, f"Link creation limit reached ({plan.max_links}). Upgrade to use Short Link feature with QR.", None)
+             limit_links = current_user.get_limit('max_links')
+             if limit_links != -1 and current_user.usage_links >= limit_links:
+                  return api_response(False, f"Link creation limit reached ({limit_links}). Upgrade to use Short Link feature with QR.", None)
         
         # 3. Logo Limit (If logo is provided)
         if logo_data:
-             if plan.max_qr_with_logo != -1 and current_user.usage_qr_with_logo >= plan.max_qr_with_logo:
-                  return api_response(False, f"Logo limit reached ({plan.max_qr_with_logo}). You can only create {plan.max_qr_with_logo} QRs with custom logos.", None)
+             limit_logo = current_user.get_limit('max_qr_with_logo')
+             if limit_logo != -1 and current_user.usage_qr_with_logo >= limit_logo:
+                  return api_response(False, f"Logo limit reached ({limit_logo}). You can only create {limit_logo} QRs with custom logos.", None)
         
         # 3. Custom Slug Limit (if applicable)
         if custom_short:
             current_custom_count = Urls.query.filter_by(user_id=current_user.id, is_custom=True).count()
-            if current_custom_count >= plan.max_custom_links:
-                return api_response(False, f"Custom link limit reached ({plan.max_custom_links}). Please upgrade.", None)
+            limit_custom = current_user.get_limit('max_custom_links')
+            if current_custom_count >= limit_custom:
+                return api_response(False, f"Custom link limit reached ({limit_custom}). Please upgrade.", None)
 
     base_url = current_app.config.get("BASE_URL")
 
@@ -899,7 +908,7 @@ def generate_qr(current_user):
     logo_path_arg = None
     
     # Enforce default logo for Free plan (or if styling not allowed)
-    if plan and not plan.allow_qr_styling:
+    if plan and not current_user.get_limit('allow_qr_styling'):
         # User cannot customize style or logo, but we enforce the default branding
         default_logo = os.path.join(current_app.static_folder or "static", "image.png")
         if os.path.exists(default_logo):

@@ -191,8 +191,13 @@ def process_payment_captured(event_data, webhook_event):
                                     break
                         
                         if internal_plan:
-                            user.plan_id = internal_plan.id
-                            print(f"DEBUG: Updated User {user.id} to Plan ID {internal_plan.id}")
+                            if user.plan_id != internal_plan.id:
+                                user.plan_id = internal_plan.id
+                                # CLEAR Custom Limits on Plan CHANGE only
+                                user.custom_limits = None
+                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
+                            else:
+                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
                     
                     # Update billing info
                     billing_info = BillingInfo.query.filter_by(user_id=sub.user_id).order_by(BillingInfo.created_at.desc()).first()
@@ -302,8 +307,13 @@ def process_subscription_activated(event_data, webhook_event):
                                     break
                         
                         if internal_plan:
-                            user.plan_id = internal_plan.id
-                            print(f"DEBUG: Updated User {user.id} to Plan ID {internal_plan.id}")
+                            if user.plan_id != internal_plan.id:
+                                user.plan_id = internal_plan.id
+                                # CLEAR Custom Limits on Plan CHANGE only
+                                user.custom_limits = None
+                                print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits Cleared)")
+                            else:
+                                print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Limits Preserved)")
                     
                     # Update billing info
                     billing_info = BillingInfo.query.filter_by(user_id=sub.user_id).order_by(BillingInfo.created_at.desc()).first()
