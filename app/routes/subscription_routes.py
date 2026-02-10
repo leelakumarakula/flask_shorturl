@@ -309,21 +309,20 @@ def create_plan_and_subscription(current_user):
             # is successfully authenticated via webhook (subscription.authenticated).
             # This ensures the user isn't downgraded if the payment fails.
 
-            # Check for existing PENDING subscription to reuse - DISABLED
-            # existing_sub = Subscription.query.filter_by(
-            #     user_id=current_user.id,
-            #     razorpay_plan_id=razorpay_plan_id,
-            #     subscription_status='Pending'
-            # ).order_by(Subscription.created_date.desc()).first()
+            existing_sub = Subscription.query.filter_by(
+                user_id=current_user.id,
+                razorpay_plan_id=razorpay_plan_id,
+                subscription_status='Pending'
+            ).order_by(Subscription.created_date.desc()).first()
 
-            # if existing_sub:
-            #     print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
-            #     return jsonify({
-            #         'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
-            #         'razorpay_plan_id': razorpay_plan_id,
-            #         'key_id': razorpay_key_id,
-            #         'status': existing_sub.subscription_status
-            #     }), 200
+            if existing_sub:
+                print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
+                return jsonify({
+                    'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
+                    'razorpay_plan_id': razorpay_plan_id,
+                    'key_id': razorpay_key_id,
+                    'status': existing_sub.subscription_status
+                }), 200
 
             # Create subscription on Razorpay
             subscription_data = data.get('subscription', {})
