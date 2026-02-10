@@ -3,9 +3,10 @@ import jwt
 from flask import current_app
 
 
-def encode_token(user_id: int, hours: int = 1) -> str:
+def encode_token(user_id: int,email:str, hours: int = 1) -> str:
     payload = {
         "user_id": user_id,
+        "email":email,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7),
     }
     token = jwt.encode(payload, current_app.config["SECRET_KEY"], algorithm="HS256")

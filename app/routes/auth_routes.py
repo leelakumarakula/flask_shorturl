@@ -53,7 +53,7 @@ def signup():
     db.session.add(new_user)
     db.session.commit()
  
-    token = encode_token(new_user.id)
+    token = encode_token(new_user.id,new_user.email)
  
     return api_response(True, "Signup successful", {
         "token": token,
@@ -75,7 +75,7 @@ def get_token():
     if not user:
         return api_response(False, "Invalid client_id", None)
  
-    token = encode_token(user.id)
+    token = encode_token(user.id,user.email)
  
     return api_response(True, "Token issued", {"access_token": token})
  
@@ -94,7 +94,7 @@ def login():
         if new_hash:
             user.password = new_hash
             db.session.commit()
-        token = encode_token(user.id)
+        token = encode_token(user.id,user.email)
         return api_response(True, "Login successful", {"token": token})
  
     return api_response(False, "Invalid credentials", None)

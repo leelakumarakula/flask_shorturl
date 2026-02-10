@@ -24,6 +24,11 @@ from ..models.user import User
 from ..utils.passwords import verify_and_upgrade_password
 from ..utils.static_urls import build_static_url
 from ..utils.qr_generator import generate_styled_qr
+from ..models.subscription import Subscription
+from ..models.subscription_history import SubscriptionHistory
+from ..models.billing_info import BillingInfo
+from ..models.webhook_events import WebhookEvent
+from ..models.user_deletion_history import UserDeletionHistory
  
  
 url_bp = Blueprint("url", __name__)
@@ -781,10 +786,69 @@ def edit_short_url(current_user):
 def delete_account(current_user):
     try:
         # ----------------------------------------------
-        # 1. Collect all user's URLs
+        # 0. Save user deletion history BEFORE deletion
         # ----------------------------------------------
+        # Get latest subscription info
+        latest_subscription = Subscription.query.filter_by(
+            user_id=current_user.id
+        ).order_by(Subscription.created_date.desc()).first()
+        
+        # Get latest billing info
+        latest_billing = BillingInfo.query.filter_by(
+            user_id=current_user.id
+        ).order_by(BillingInfo.created_at.desc()).first()
+        
+        # Calculate total clicks
         urls = Urls.query.filter_by(user_id=current_user.id).all()
         url_ids = [u.id_ for u in urls]
+        total_clicks = UrlAnalytics.query.filter(
+            UrlAnalytics.url_id.in_(url_ids)
+        ).count() if url_ids else 0
+        
+        # Get IP address from request
+        xff = request.headers.get("X-Forwarded-For", '')
+        ip_address = xff.split(',')[0].strip() if xff else request.remote_addr or "0.0.0.0"
+        
+        # Create deletion history record
+        deletion_history = UserDeletionHistory(
+            user_id=current_user.id,
+            firstname=current_user.firstname,
+            lastname=current_user.lastname,
+            email=current_user.email,
+            phone=current_user.phone,
+            organization=current_user.organization,
+            account_created_at=current_user.created_at,
+            
+            # Subscription info
+            last_subscription_plan=latest_subscription.razorpay_plan_id if latest_subscription else None,
+            last_subscription_date=latest_subscription.subscription_start_date if latest_subscription else None,
+            last_subscription_end_date=latest_subscription.subscription_end_date if latest_subscription else None,
+            last_subscription_amount=latest_subscription.plan_amount if latest_subscription else None,
+            razorpay_subscription_id=latest_subscription.razorpay_subscription_id if latest_subscription else None,
+            
+            # Billing info
+            billing_first_name=latest_billing.first_name if latest_billing else None,
+            billing_last_name=latest_billing.last_name if latest_billing else None,
+            billing_email=latest_billing.email if latest_billing else None,
+            billing_phone=latest_billing.phone_number if latest_billing else None,
+            billing_address=latest_billing.address if latest_billing else None,
+            
+            # Usage statistics
+            total_links_created=current_user.usage_links or 0,
+            total_qrs_created=current_user.usage_qrs or 0,
+            total_clicks=total_clicks,
+            
+            # Deletion metadata
+            deleted_by='user',
+            ip_address=ip_address
+        )
+        
+        db.session.add(deletion_history)
+        db.session.flush()  # Save history before deleting user data
+        
+        # ----------------------------------------------
+        # 1. Collect all user's URLs
+        # ----------------------------------------------
         short_codes = [u.short for u in urls]
  
         # ----------------------------------------------
@@ -826,7 +890,22 @@ def delete_account(current_user):
             ).delete(synchronize_session=False)
  
         # ----------------------------------------------
-        # 6. Delete the user
+        # 6. Delete subscription-related data
+        # ----------------------------------------------
+        # Delete webhook events for this user
+        WebhookEvent.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+        
+        # Delete billing info
+        BillingInfo.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+        
+        # Delete subscription history
+        SubscriptionHistory.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+        
+        # Delete active subscriptions
+        Subscription.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+
+        # ----------------------------------------------
+        # 7. Delete the user
         # ----------------------------------------------
         db.session.delete(current_user)
         db.session.commit()
@@ -836,7 +915,7 @@ def delete_account(current_user):
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Account deletion error: {e}")
-        return api_response(False, "Failed to delete account.", None)
+        return api_response(False, f"Failed to delete account: {str(e)}", None)
 @url_bp.route('/generate-qr', methods=['POST'])
 @token_required
 def generate_qr(current_user):
