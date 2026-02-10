@@ -37,18 +37,19 @@ def create_plan(current_user):
             if not all([period, interval, item]):
                  return jsonify({'error': 'Missing required fields: period, interval, item'}), 400
 
-            # Check for existing plan to prevent duplicates
+            # Check for existing USER-SPECIFIC plan to prevent duplicates and enable reuse for renewals
             plan_name = item.get('name')
             existing_plan = RazorpaySubscriptionPlan.query.filter_by(
+                user_id=current_user.id,  # User-specific lookup
                 plan_name=plan_name,
                 period=period,
                 interval=interval
             ).first()
 
             if existing_plan:
-                 print(f"DEBUG: Returning existing plan {existing_plan.razorpay_plan_id} for {plan_name}")
+                 print(f"DEBUG: Returning existing plan {existing_plan.razorpay_plan_id} for user {current_user.id}, plan {plan_name}")
                  return jsonify({
-                    'message': 'Plan retrieved successfully',
+                    'message': 'Plan retrieved successfully (renewal)',
                     'plan': {
                         'id': existing_plan.id,
                         'razorpay_plan_id': existing_plan.razorpay_plan_id,
@@ -56,7 +57,7 @@ def create_plan(current_user):
                     }
                 }), 200
 
-            # Razorpay API Call
+            # Razorpay API Call - Create new user-specific plan
             razorpay_key_id = current_app.config.get('RAZORPAY_KEY_ID')
             razorpay_key_secret = current_app.config.get('RAZORPAY_KEY_SECRET')
 
@@ -84,9 +85,10 @@ def create_plan(current_user):
             razorpay_data = response.json()
             razorpay_plan_id = razorpay_data.get('id')
 
-            # Create Database Record
+            # Create Database Record with user_id
             new_plan = RazorpaySubscriptionPlan(
                 plan_name=item.get('name'),
+                user_id=current_user.id,  # Link plan to user
                 razorpay_plan_id=razorpay_plan_id,
                 period=period,
                 interval=interval,
@@ -98,7 +100,7 @@ def create_plan(current_user):
             db.session.add(new_plan)
             db.session.commit()
             
-            print(f"DEBUG: Created new plan {razorpay_plan_id} for {plan_name}")
+            print(f"DEBUG: Created new user-specific plan {razorpay_plan_id} for user {current_user.id}, plan {plan_name}")
 
             return jsonify({
                 'message': 'Plan created successfully',
@@ -111,6 +113,7 @@ def create_plan(current_user):
 
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
 
 
 @subscription_bp.route('/create_subscription', methods=['POST'])
@@ -242,9 +245,10 @@ def create_plan_and_subscription(current_user):
             if not all([period, interval, item]):
                 return jsonify({'error': 'Missing required plan fields: period, interval, item'}), 400
 
-            # Check for existing plan to prevent duplicates
+            # Check for existing USER-SPECIFIC plan to prevent duplicates and enable reuse for renewals
             plan_name = item.get('name')
             existing_plan = RazorpaySubscriptionPlan.query.filter_by(
+                user_id=current_user.id,  # User-specific lookup
                 plan_name=plan_name,
                 period=period,
                 interval=interval
@@ -256,12 +260,12 @@ def create_plan_and_subscription(current_user):
             if not razorpay_key_id or not razorpay_key_secret:
                 return jsonify({'error': 'Razorpay credentials not configured'}), 500
 
-            # Create or get plan
+            # Create or get user-specific plan
             if existing_plan:
-                print(f"DEBUG: Using existing plan {existing_plan.razorpay_plan_id} for {plan_name}")
+                print(f"DEBUG: Using existing user-specific plan {existing_plan.razorpay_plan_id} for user {current_user.id}, plan {plan_name} (RENEWAL)")
                 razorpay_plan_id = existing_plan.razorpay_plan_id
             else:
-                # Create new plan on Razorpay
+                # Create new user-specific plan on Razorpay
                 url = "https://api.razorpay.com/v1/plans"
                 response = requests.post(
                     url,
@@ -281,11 +285,11 @@ def create_plan_and_subscription(current_user):
                 razorpay_data = response.json()
                 razorpay_plan_id = razorpay_data.get('id')
 
-                # Create Database Record
+                # Create Database Record with user_id
                 new_plan = RazorpaySubscriptionPlan(
                     plan_name=item.get('name'),
                     razorpay_plan_id=razorpay_plan_id,
-                    user_id=current_user.id,
+                    user_id=current_user.id,  # Link plan to user
                     period=period,
                     interval=interval,
                     amount=item.get('amount') / 100.0 if item.get('amount') else 0.0,
@@ -295,7 +299,8 @@ def create_plan_and_subscription(current_user):
 
                 db.session.add(new_plan)
                 db.session.commit()
-                print(f"DEBUG: Created new plan {razorpay_plan_id} for {plan_name}")
+                print(f"DEBUG: Created new user-specific plan {razorpay_plan_id} for user {current_user.id}, plan {plan_name}")
+
 
             # ============================================================================
             # CANCEL EXISTING ACTIVE SUBSCRIPTION BEFORE UPGRADE
