@@ -133,20 +133,20 @@ def create_subscription(current_user):
             if not razorpay_key_id or not razorpay_key_secret:
                  return jsonify({'error': 'Razorpay credentials not configured'}), 500
 
-            # Check for existing PENDING subscription to reuse
-            existing_sub = Subscription.query.filter_by(
-                user_id=current_user.id,
-                razorpay_plan_id=plan_id,
-                subscription_status='Pending' # Razorpay status for created but not paid
-            ).order_by(Subscription.created_date.desc()).first()
+            # Check for existing PENDING subscription to reuse - DISABLED
+            # existing_sub = Subscription.query.filter_by(
+            #     user_id=current_user.id,
+            #     razorpay_plan_id=plan_id,
+            #     subscription_status='Pending' # Razorpay status for created but not paid
+            # ).order_by(Subscription.created_date.desc()).first()
 
-            if existing_sub:
-                 print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
-                 return jsonify({
-                    'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
-                    'key_id': razorpay_key_id,
-                    'status': existing_sub.subscription_status
-                }), 200
+            # if existing_sub:
+            #      print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
+            #      return jsonify({
+            #         'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
+            #         'key_id': razorpay_key_id,
+            #         'status': existing_sub.subscription_status
+            #     }), 200
             
             # Get additional parameters
             total_count = data.get('total_count', 12)
@@ -303,60 +303,27 @@ def create_plan_and_subscription(current_user):
 
 
             # ============================================================================
-            # CANCEL EXISTING ACTIVE SUBSCRIPTION BEFORE UPGRADE
+            # EXISTING ACTIVE SUBSCRIPTION CANCELLATION DEFERRED TO WEBHOOK
             # ============================================================================
-            # Check if user has any active subscription (not Pending, not Cancelled)
-            existing_active_sub = Subscription.query.filter_by(
-                user_id=current_user.id,
-                is_active=True
-            ).filter(
-                Subscription.subscription_status.in_(['Active', 'Authenticated'])
-            ).first()
+            # The existing subscription will be cancelled ONLY after the new subscription
+            # is successfully authenticated via webhook (subscription.authenticated).
+            # This ensures the user isn't downgraded if the payment fails.
 
-            if existing_active_sub:
-                print(f"DEBUG: Found existing active subscription {existing_active_sub.razorpay_subscription_id}, cancelling before upgrade")
-                
-                # Cancel the existing subscription in Razorpay (immediate cancellation for upgrades)
-                cancel_success, cancel_response = _call_razorpay_cancel_api(
-                    existing_active_sub.razorpay_subscription_id, 
-                    cancel_at_cycle_end=False  # Immediate cancellation for upgrades
-                )
-                
-                if cancel_success:
-                    # Create history record for the cancelled subscription
-                    _create_subscription_history(existing_active_sub, 'Upgrade to New Plan')
-                    
-                    # Update the existing subscription status
-                    existing_active_sub.subscription_status = 'Cancelled'
-                    existing_active_sub.is_active = False
-                    existing_active_sub.updated_date = datetime.datetime.utcnow()
-                    
-                    db.session.commit()
-                    print(f"DEBUG: Successfully cancelled existing subscription {existing_active_sub.razorpay_subscription_id}")
-                else:
-                    # Log warning but continue with upgrade (user might have manually cancelled)
-                    print(f"WARNING: Failed to cancel existing subscription in Razorpay: {cancel_response}")
-                    # Still update local status
-                    existing_active_sub.subscription_status = 'Cancelled'
-                    existing_active_sub.is_active = False
-                    existing_active_sub.updated_date = datetime.datetime.utcnow()
-                    db.session.commit()
+            # Check for existing PENDING subscription to reuse - DISABLED
+            # existing_sub = Subscription.query.filter_by(
+            #     user_id=current_user.id,
+            #     razorpay_plan_id=razorpay_plan_id,
+            #     subscription_status='Pending'
+            # ).order_by(Subscription.created_date.desc()).first()
 
-            # Check for existing PENDING subscription to reuse
-            existing_sub = Subscription.query.filter_by(
-                user_id=current_user.id,
-                razorpay_plan_id=razorpay_plan_id,
-                subscription_status='Pending'
-            ).order_by(Subscription.created_date.desc()).first()
-
-            if existing_sub:
-                print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
-                return jsonify({
-                    'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
-                    'razorpay_plan_id': razorpay_plan_id,
-                    'key_id': razorpay_key_id,
-                    'status': existing_sub.subscription_status
-                }), 200
+            # if existing_sub:
+            #     print(f"DEBUG: Reuse existing Pending Subscription {existing_sub.razorpay_subscription_id}")
+            #     return jsonify({
+            #         'razorpay_subscription_id': existing_sub.razorpay_subscription_id,
+            #         'razorpay_plan_id': razorpay_plan_id,
+            #         'key_id': razorpay_key_id,
+            #         'status': existing_sub.subscription_status
+            #     }), 200
 
             # Create subscription on Razorpay
             subscription_data = data.get('subscription', {})

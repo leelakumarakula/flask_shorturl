@@ -10,6 +10,7 @@ from app.models.subscription_history import SubscriptionHistory
 from app.models.user import User
 from app.models.plan import Plan
 from app.models.billing_info import BillingInfo
+import requests
  
  
 def verify_webhook_signature(payload_body, signature, secret):
@@ -239,7 +240,7 @@ def process_payment_captured(event_data, webhook_event):
  
  
 def process_payment_failed(event_data, webhook_event):
-    """Process payment.failed event"""
+    """Process payment.failed event - Mark subscription as failed and downgrade user"""
     try:
         payload = event_data.get('payload', {})
         payment_entity = payload.get('payment', {}).get('entity', {})
@@ -256,8 +257,9 @@ def process_payment_failed(event_data, webhook_event):
                 sub.subscription_status = 'Failed'
                 sub.is_active = False
                 sub.updated_date = datetime.datetime.utcnow()
+                
                 db.session.commit()
-                print(f"DEBUG: Marked subscription {subscription_id} as Failed")
+                print(f"DEBUG: Marked subscription {subscription_id} as Failed (User plan remains unchanged)")
        
         webhook_event.processed = True
         webhook_event.processed_at = datetime.datetime.utcnow()
@@ -438,6 +440,196 @@ def process_subscription_cancelled(event_data, webhook_event):
         return False
  
  
+
+def process_subscription_authenticated(event_data, webhook_event):
+    """Process subscription.authenticated event - Activate subscription"""
+    try:
+        payload = event_data.get('payload', {})
+        subscription_entity = payload.get('subscription', {}).get('entity', {})
+       
+        subscription_id = subscription_entity.get('id')
+       
+        print(f"DEBUG: Processing subscription.authenticated for subscription {subscription_id}")
+       
+        if subscription_id:
+            # Find subscription in database
+            sub = Subscription.query.filter_by(razorpay_subscription_id=subscription_id).first()
+           
+            if sub:
+                # Update subscription status
+                sub.subscription_status = 'Active'
+                sub.is_active = True
+               
+                # Update timestamps from payload (Unix timestamp to UTC)
+                current_start = subscription_entity.get('current_start')
+                current_end = subscription_entity.get('current_end')
+                
+                now_utc = datetime.datetime.utcnow()
+                sub.updated_date = now_utc
+                
+                if current_start:
+                    sub.subscription_start_date = datetime.datetime.utcfromtimestamp(current_start)
+                else:
+                    sub.subscription_start_date = now_utc
+                    
+                if current_end:
+                    sub.subscription_end_date = datetime.datetime.utcfromtimestamp(current_end)
+                    sub.next_billing_date = sub.subscription_end_date
+                else:
+                    # Fallback if current_end is missing: calculate based on plan period
+                    rz_plan = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=sub.razorpay_plan_id).first()
+                    days = 30 # Default
+                    if rz_plan:
+                        period_lower = (rz_plan.period or "").lower()
+                        if "monthly" in period_lower:
+                            days = 30
+                        elif "yearly" in period_lower:
+                            days = 360
+                    
+                    sub.subscription_end_date = now_utc + datetime.timedelta(days=days)
+                    sub.next_billing_date = sub.subscription_end_date
+
+                # Get plan details for linking user
+                rz_plan = RazorpaySubscriptionPlan.query.filter_by(razorpay_plan_id=sub.razorpay_plan_id).first()
+                
+                # Link plan to user
+                user = User.query.get(sub.user_id)
+                if user and rz_plan:
+                    internal_plan = Plan.query.filter_by(name=rz_plan.plan_name).first()
+                    if not internal_plan:
+                        # Fallback: partial match
+                        all_plans = Plan.query.all()
+                        for p in all_plans:
+                            if p.name.lower() in rz_plan.plan_name.lower():
+                                internal_plan = p
+                                break
+                    
+                    if internal_plan:
+                        if user.plan_id != internal_plan.id:
+                            user.plan_id = internal_plan.id
+                            # CLEAR Custom Limits on Plan CHANGE only
+                            user.custom_limits = None
+                            # RESET Usage Counters on Plan CHANGE/UPGRADE
+                            user.usage_links = 0
+                            user.usage_qrs = 0
+                            user.usage_qr_with_logo = 0
+                            user.usage_editable_links = 0
+                            print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits & Usage Counters Reset)")
+                        else:
+                            if not user.permanent_custom_limits:
+                                user.custom_limits = None
+                            # RESET Usage Counters on Plan RENEWAL
+                            user.usage_links = 0
+                            user.usage_qrs = 0
+                            user.usage_qr_with_logo = 0
+                            user.usage_editable_links = 0
+                            print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Usage Counters Reset)")
+                
+                # Update billing info
+                billing_info = BillingInfo.query.filter_by(user_id=sub.user_id).order_by(BillingInfo.created_at.desc()).first()
+                if billing_info:
+                    billing_info.razorpay_plan_id = sub.razorpay_plan_id
+                    billing_info.razorpay_subscription_id = subscription_id
+               
+                db.session.commit()
+                print(f"DEBUG: Activated subscription {subscription_id} via subscription.authenticated")
+
+                # ============================================================================
+                # CANCEL PREVIOUS ACTIVE SUBSCRIPTIONS (DEFERRED CANCELLATION)
+                # ============================================================================
+                try:
+                    # Find other active subscriptions for this user
+                    other_active_subs = Subscription.query.filter_by(
+                        user_id=sub.user_id,
+                        is_active=True
+                    ).filter(
+                        Subscription.id != sub.id,  # Exclude current new subscription
+                        Subscription.subscription_status.in_(['Active', 'Authenticated'])
+                    ).all()
+
+                    for old_sub in other_active_subs:
+                        print(f"DEBUG: Found previous active subscription {old_sub.razorpay_subscription_id}, cancelling now")
+                        _cancel_old_subscription(old_sub)
+                        
+                except Exception as e:
+                    print(f"WARNING: Failed to process deferred cancellation: {str(e)}")
+
+            else:
+                print(f"WARNING: Subscription {subscription_id} not found in database")
+       
+        # Mark webhook as processed
+        webhook_event.processed = True
+        webhook_event.processed_at = datetime.datetime.utcnow()
+        db.session.commit()
+       
+        return True
+       
+    except Exception as e:
+        error_msg = f"Failed to process subscription.authenticated: {str(e)}"
+        print(f"ERROR: {error_msg}")
+        webhook_event.error_message = error_msg
+        db.session.commit()
+        return False
+
+
+def _cancel_old_subscription(subscription):
+    """
+    Helper to cancel an old subscription via Razorpay API and create history
+    """
+    try:
+        razorpay_key_id = current_app.config.get('RAZORPAY_KEY_ID')
+        razorpay_key_secret = current_app.config.get('RAZORPAY_KEY_SECRET')
+        
+        if not razorpay_key_id or not razorpay_key_secret:
+            print("ERROR: Razorpay credentials missing for cancellation")
+            return
+
+        # 1. Call Razorpay API
+        url = f"https://api.razorpay.com/v1/subscriptions/{subscription.razorpay_subscription_id}/cancel"
+        payload = {"cancel_at_cycle_end": False} # Cancel immediately upon upgrade
+        
+        response = requests.post(
+            url,
+            json=payload,
+            auth=(razorpay_key_id, razorpay_key_secret)
+        )
+        
+        if response.status_code == 200:
+            print(f"DEBUG: Razorpay cancellation successful for {subscription.razorpay_subscription_id}")
+        else:
+            print(f"WARNING: Razorpay cancellation failed for {subscription.razorpay_subscription_id}: {response.text}")
+            # We proceed to mark it cancelled locally anyway to avoid double billing/access
+
+        # 2. Create History Record
+        history = SubscriptionHistory(
+            subscription_id=subscription.razorpay_subscription_id,
+            user_id=subscription.user_id,
+            razorpay_plan_id=subscription.razorpay_plan_id,
+            plan_amount=subscription.plan_amount,
+            cancelled_date=datetime.datetime.utcnow(),
+            cancelled_reason='Upgrade to New Plan (Webhook)',
+            subscription_start_date=subscription.subscription_start_date,
+            subscription_end_date=subscription.subscription_end_date,
+            is_active=True,
+            card_id=subscription.card_id,
+            total_count=subscription.total_count,
+            notes=subscription.notes
+        )
+        db.session.add(history)
+
+        # 3. Update Subscription Status
+        subscription.subscription_status = 'Cancelled'
+        subscription.is_active = False
+        subscription.updated_date = datetime.datetime.utcnow()
+        
+        db.session.commit()
+        print(f"DEBUG: deferred cancellation completed for {subscription.razorpay_subscription_id}")
+
+    except Exception as e:
+        print(f"ERROR: Error in _cancel_old_subscription: {str(e)}")
+
+
+
 def process_webhook_event(event_data, signature):
     """
     Main webhook processing function
@@ -459,22 +651,16 @@ def process_webhook_event(event_data, signature):
         event_type = event_data.get('event', '')
        
         # Route to appropriate handler based on event type
-        if event_type == 'payment.authorized':
-            success = process_payment_authorized(event_data, webhook_event)
-        elif event_type == 'payment.captured':
-            success = process_payment_captured(event_data, webhook_event)
-        elif event_type == 'payment.failed':
-            success = process_payment_failed(event_data, webhook_event)
-        elif event_type == 'subscription.activated':
-            success = process_subscription_activated(event_data, webhook_event)
+        if event_type == 'subscription.authenticated':
+            success = process_subscription_authenticated(event_data, webhook_event)
         elif event_type == 'subscription.cancelled':
             success = process_subscription_cancelled(event_data, webhook_event)
-        elif event_type == 'subscription.charged':
-            # Handle recurring payment
-            success = process_payment_captured(event_data, webhook_event)
+        elif event_type == 'payment.failed':
+            success = process_payment_failed(event_data, webhook_event)
         else:
-            # Unknown event type, just mark as processed
-            print(f"DEBUG: Unknown event type {event_type}, storing only")
+            # All other events are ignored/marked processed without action as per new requirement
+            # 'payment.authorized', 'payment.captured', 'subscription.activated', 'subscription.charged'
+            print(f"DEBUG: Event type {event_type} ignored/skipped (marking processed)")
             webhook_event.processed = True
             webhook_event.processed_at = datetime.datetime.utcnow()
             db.session.commit()
