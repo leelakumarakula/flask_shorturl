@@ -7,7 +7,7 @@ class RazorpaySubscriptionPlan(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     plan_name = db.Column(db.String(255), nullable=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # User-specific plan
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)  # User-specific plan
     razorpay_plan_id = db.Column(db.String(255), nullable=True)
     period = db.Column(db.String(50), nullable=True)
     interval = db.Column(db.Integer, nullable=False)
@@ -31,7 +31,7 @@ class Subscription(db.Model):
     __tablename__ = 'subscriptions'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.Integer, default=0, nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), default=0, nullable=True)
     cart_id = db.Column(db.String(255), default='', nullable=True)
     razorpay_plan_id = db.Column(db.String(255), default='', nullable=True)
     plan_amount = db.Column(db.Float, default=0.0, nullable=True)

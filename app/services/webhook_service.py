@@ -408,20 +408,33 @@ def process_subscription_cancelled(event_data, webhook_event):
                 sub.is_active = False
                 sub.updated_date = datetime.datetime.utcnow()
                 
-                # Downgrade user to Free plan
-                user = User.query.get(sub.user_id)
-                if user:
-                    free_plan = Plan.query.filter_by(name='Free').first()
-                    if free_plan:
-                        user.plan_id = free_plan.id
-                        user.custom_limits = None
-                        # Set usage counters to Free plan limits (not zero)
-                        # This gives users the full Free plan quota
-                        user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
-                        user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
-                        user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
-                        user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
-                        print(f"DEBUG: Downgraded user {user.id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
+                # Check for OTHER active subscriptions (e.g. from an upgrade)
+                # If another active subscription exists, DO NOT downgrade the user
+                other_active_sub = Subscription.query.filter_by(
+                    user_id=sub.user_id,
+                    is_active=True
+                ).filter(
+                    Subscription.id != sub.id,
+                    Subscription.subscription_status.in_(['Active', 'Authenticated'])
+                ).first()
+
+                if other_active_sub:
+                    print(f"DEBUG: User {sub.user_id} has another active subscription {other_active_sub.razorpay_subscription_id}. SKIPPING downgrade to Free.")
+                else:
+                    # Downgrade user to Free plan ONLY if no other active subscription exists
+                    user = User.query.get(sub.user_id)
+                    if user:
+                        free_plan = Plan.query.filter_by(name='Free').first()
+                        if free_plan:
+                            user.plan_id = free_plan.id
+                            user.custom_limits = None
+                            # Set usage counters to Free plan limits (not zero)
+                            # This gives users the full Free plan quota
+                            user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
+                            user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
+                            user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
+                            user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
+                            print(f"DEBUG: Downgraded user {user.id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
                 
                 db.session.commit()
                 print(f"DEBUG: Cancelled subscription {subscription_id}")

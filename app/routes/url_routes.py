@@ -24,10 +24,11 @@ from ..models.user import User
 from ..utils.passwords import verify_and_upgrade_password
 from ..utils.static_urls import build_static_url
 from ..utils.qr_generator import generate_styled_qr
-from ..models.subscription import Subscription
+from ..models.subscription import Subscription, RazorpaySubscriptionPlan
 from ..models.subscription_history import SubscriptionHistory
 from ..models.billing_info import BillingInfo
 from ..models.webhook_events import WebhookEvent
+from ..models.user_deletion_history import UserDeletionHistory
 from ..models.user_deletion_history import UserDeletionHistory
  
  
@@ -903,6 +904,9 @@ def delete_account(current_user):
         
         # Delete active subscriptions
         Subscription.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
+
+        # Delete user-specific Razorpay Plans
+        RazorpaySubscriptionPlan.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
 
         # ----------------------------------------------
         # 7. Delete the user
