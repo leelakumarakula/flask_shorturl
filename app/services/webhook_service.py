@@ -382,6 +382,12 @@ def process_subscription_cancelled(event_data, webhook_event):
         if subscription_id:
             sub = Subscription.query.filter_by(razorpay_subscription_id=subscription_id).first()
             if sub:
+                # Update subscription end_date from payload if available
+                current_end = subscription_entity.get('current_end')
+                if current_end:
+                    sub.subscription_end_date = datetime.datetime.utcfromtimestamp(current_end)
+                    print(f"DEBUG: Updated subscription {subscription_id} end_date to {sub.subscription_end_date} from webhook")
+
                 # Create subscription history record before updating
                 try:
                     history = SubscriptionHistory(
