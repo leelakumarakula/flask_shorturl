@@ -716,13 +716,12 @@ def edit_short_url(current_user):
             r_logo_data = url.logo
             r_logo_path = None
            
-            if current_user.plan and not current_user.get_limit('allow_qr_styling'):
+            if (current_user.plan and not current_user.get_limit('allow_qr_styling')) or url.plan_name == "Free" :
                  # Enforce default logo
                  default_logo = os.path.join(current_app.static_folder or "static", "image.png")
                  if os.path.exists(default_logo):
                       r_logo_path = default_logo
                  r_logo_data = None
- 
             static_rel = generate_styled_qr(
                 short_code=new_short,
                 color_dark=url.color_dark or "#000000",
