@@ -231,6 +231,7 @@ def redirection(short_url):
     long_url = None
     url_id = None
     url_entry = None
+    
  
     try:
         if extensions.redis_client:
@@ -245,6 +246,26 @@ def redirection(short_url):
             payload = json.loads(cached)
             long_url = payload.get("long")
             url_id = payload.get("id")          # using id_
+
+            # -----------------------------
+            # REDIS HIT: Verify owner status (Testing: 2-hour grace period)
+            # -----------------------------
+            if url_id:
+                # We need to fetch the owner to check cancellation
+                # Since we don't have user_id in payload, fetch URL entry first
+                u_entry = Urls.query.filter_by(id_=url_id).first()
+                if u_entry:
+                     owner = User.query.get(u_entry.user_id)
+                     if owner and owner.cancellation_date:
+                        time_diff = datetime.datetime.utcnow() - owner.cancellation_date
+                        hours_since_cancel = time_diff.total_seconds() / 3600
+                        
+                        if hours_since_cancel > 2:
+                            # remove from redis
+                            if extensions.redis_client:
+                                extensions.redis_client.delete(f"short:{short_url}")
+                            # Block Access
+                            return api_response(False, " Redis Cache Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
         except:
             # If JSON failed, assume raw string
             long_url = cached
@@ -276,7 +297,7 @@ def redirection(short_url):
             
             if hours_since_cancel > 2:
                  # GRACE PERIOD EXPIRED -> Block Access
-                 return api_response(False, "This link is no longer active due to subscription expiry (Testing).", None), 404
+                 return api_response(False, "Database Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
  
         long_url = url_entry.long
         url_id = url_entry.id_                 # using id_
