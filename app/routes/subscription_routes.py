@@ -1,3 +1,4 @@
+
 from flask import Blueprint, request, jsonify, current_app
 import json
 from app.extensions import db
@@ -604,6 +605,8 @@ def _create_subscription_history(subscription, reason='User Requested'):
         raise
 
 
+from app.models.url import Urls
+
 def _downgrade_user_to_free(user_id):
     """
     Downgrade user to Free plan and reset usage counters
@@ -629,11 +632,35 @@ def _downgrade_user_to_free(user_id):
         user.plan_id = free_plan.id
         user.custom_limits = None
         
-        # Set usage counters to Free plan limits (not zero)
-        # This gives users the full Free plan quota
-        Freeplancount=urls.query.filter_by(user_id=user_id,plan_name="Free").count()
-        user.usage_links = Freeplancount
-        user.usage_qrs = Freeplancount
+        # Recalculate usage based on existing "Free" items
+        # Note: This logic assumes we only count items already marked as "Free"
+        
+        # 1. FreeLinkCount: show_short=True, qr_code is None
+        FreeLinkCount = Urls.query.filter_by(
+            user_id=user_id, 
+            plan_name="Free", 
+            show_short=True, 
+            qr_code=None
+        ).count()
+        
+        # 2. bothlinkandqr: show_short=True, qr_code is NOT None
+        bothlinkandqr = Urls.query.filter_by(
+            user_id=user_id, 
+            plan_name="Free", 
+            show_short=True
+        ).filter(Urls.qr_code.isnot(None)).count()
+        
+        # 3. FreeQrCount: show_short=False, qr_code is NOT None
+        FreeQrCount = Urls.query.filter_by(
+            user_id=user_id, 
+            plan_name="Free", 
+            show_short=False
+        ).filter(Urls.qr_code.isnot(None)).count()
+        
+        user.usage_links = FreeLinkCount + bothlinkandqr
+        user.usage_qrs = FreeQrCount + bothlinkandqr
+        
+        # Reset premium features usage to 0
         user.usage_qr_with_logo = 0
         user.usage_editable_links = 0
         
