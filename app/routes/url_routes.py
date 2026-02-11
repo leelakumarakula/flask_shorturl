@@ -716,7 +716,7 @@ def edit_short_url(current_user):
             r_logo_data = url.logo
             r_logo_path = None
            
-            if (current_user.plan and not current_user.get_limit('allow_qr_styling')) or url.plan_name == "Free" :
+            if (current_user.plan and not current_user.get_limit('allow_qr_styling')) or url.plan_name == "FREE" :
                  # Enforce default logo
                  default_logo = os.path.join(current_app.static_folder or "static", "image.png")
                  if os.path.exists(default_logo):
