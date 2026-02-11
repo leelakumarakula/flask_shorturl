@@ -622,6 +622,9 @@ def _downgrade_user_to_free(user_id):
         if not user:
             return False
         
+        # Set cancellation date to start the 60-day grace period
+        user.cancellation_date = datetime.datetime.utcnow()
+        
         # Find Free plan
         free_plan = Plan.query.filter_by(name='Free').first()
         if not free_plan:

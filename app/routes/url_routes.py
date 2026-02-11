@@ -88,6 +88,16 @@ def create(current_user):
  
     if not long_url:
         return api_response(False, "long_url is required", None)
+
+    # -----------------------------
+    # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
+    # -----------------------------
+    if current_user.cancellation_date:
+        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+        hours_since_cancel = time_diff.total_seconds() / 3600
+        
+        if hours_since_cancel > 2:
+             return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot create new links.", None)
  
     parsed = urlparse(long_url)
     if not parsed.scheme:
@@ -245,6 +255,28 @@ def redirection(short_url):
         url_entry = Urls.query.filter_by(short=short_url).first()
         if not url_entry:
             return api_response(False, "URL does not exist", None)
+
+        # -----------------------------
+        # 60-DAY GRACE PERIOD CHECK
+        # -----------------------------
+        # Fetch the owner of the URL
+        owner = User.query.get(url_entry.user_id)
+        # if owner and owner.cancellation_date:
+        #     days_since_cancel = (datetime.datetime.utcnow() - owner.cancellation_date).days
+        #     if days_since_cancel > 60:
+        #          # GRACE PERIOD EXPIRED -> Block Access
+        #          return api_response(False, "This link is no longer active due to subscription expiry.", None), 404
+
+        # -----------------------------
+        # TESTING: 10-HOUR GRACE PERIOD CHECK
+        # -----------------------------
+        if owner and owner.cancellation_date:
+            time_diff = datetime.datetime.utcnow() - owner.cancellation_date
+            hours_since_cancel = time_diff.total_seconds() / 3600
+            
+            if hours_since_cancel > 2:
+                 # GRACE PERIOD EXPIRED -> Block Access
+                 return api_response(False, "This link is no longer active due to subscription expiry (Testing).", None), 404
  
         long_url = url_entry.long
         url_id = url_entry.id_                 # using id_
@@ -363,6 +395,18 @@ def get_analytics(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or not yours", None)
+
+    # -----------------------------
+    # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
+    # -----------------------------
+    if current_user.cancellation_date:
+        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+        hours_since_cancel = time_diff.total_seconds() / 3600
+        
+        if hours_since_cancel > 2:
+                return api_response(True, "Account frozen due to subscription expiry (Testing).", {
+                "is_frozen": True
+                })
  
     # -----------------------------
     # SUBSCRIPTION ANALYTICS CHECK
@@ -525,6 +569,37 @@ def reset_password():
 @token_required
 def my_urls(current_user):
     urls = Urls.query.filter_by(user_id=current_user.id).all()
+    
+    # -----------------------------
+    # 60-DAY GRACE PERIOD CHECK - FREEZE ACCOUNT
+    # -----------------------------
+    # if current_user.cancellation_date:
+    #      days_since_cancel = (datetime.datetime.utcnow() - current_user.cancellation_date).days
+    #      if days_since_cancel > 60:
+    #          # Grace period expired -> Return empty list or frozen state
+    #          # Requirement: "dont show in frontend"
+    #          return api_response(True, "Account frozen due to subscription expiry.", {
+    #             "user_id": current_user.id,
+    #             "urls": [],
+    #             "is_frozen": True
+    #          })
+
+    # -----------------------------
+    # TESTING: 10-HOUR GRACE PERIOD CHECK
+    # -----------------------------
+    if current_user.cancellation_date:
+         # Calculate hours since cancellation
+         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+         hours_since_cancel = time_diff.total_seconds() / 3600
+         
+         if hours_since_cancel > 2:
+             # Grace period expired -> Return empty list or frozen state
+             return api_response(True, "Account frozen due to subscription expiry (Testing).", {
+                "user_id": current_user.id,
+                "urls": [],
+                "is_frozen": True
+             })
+
     base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
     return api_response(True, "sending All url details", {
         "user_id": current_user.id,
@@ -561,6 +636,16 @@ def delete_url(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or you don't have permission to delete", None)
+
+    # -----------------------------
+    # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
+    # -----------------------------
+    if current_user.cancellation_date:
+        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+        hours_since_cancel = time_diff.total_seconds() / 3600
+        
+        if hours_since_cancel > 2:
+                return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot delete.", None)
  
     # ✔ Convert relative QR path to absolute
     if url_entry.qr_code:
@@ -658,6 +743,18 @@ def get_url_details(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found", None)
+
+    # -----------------------------
+    # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
+    # -----------------------------
+    if current_user.cancellation_date:
+            time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+            hours_since_cancel = time_diff.total_seconds() / 3600
+            
+            if hours_since_cancel > 2:
+                 return api_response(True, "Account frozen due to subscription expiry (Testing).", {
+                    "is_frozen": True
+                 })
  
     return api_response(True, "URL details", {
         "title": url_entry.title,
@@ -689,6 +786,16 @@ def edit_short_url(current_user):
         url = Urls.query.filter_by(short=old_short, user_id=current_user.id).first()
         if not url:
             return api_response(False, "Old short URL not found", None)
+
+        # -----------------------------
+        # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
+        # -----------------------------
+        if current_user.cancellation_date:
+            time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+            hours_since_cancel = time_diff.total_seconds() / 3600
+            
+            if hours_since_cancel > 2:
+                 return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot edit.", None)
  
         # -----------------------------
         # SUBSCRIPTION EDIT LIMIT

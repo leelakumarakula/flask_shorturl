@@ -202,6 +202,8 @@ def process_payment_captured(event_data, webhook_event):
                                 user.usage_qrs = 0
                                 user.usage_qr_with_logo = 0
                                 user.usage_editable_links = 0
+                                # Clear cancellation date if it exists (User resubscribed)
+                                user.cancellation_date = None
                                 print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits & Usage Counters Reset)")
                             else:
                                 if not user.permanent_custom_limits:
@@ -211,6 +213,8 @@ def process_payment_captured(event_data, webhook_event):
                                 user.usage_qrs = 0
                                 user.usage_qr_with_logo = 0
                                 user.usage_editable_links = 0
+                                # Clear cancellation date (User renewed)
+                                user.cancellation_date = None
                                 print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Usage Counters Reset)")
                    
                     # Update billing info
@@ -534,6 +538,8 @@ def process_subscription_authenticated(event_data, webhook_event):
                             user.usage_qrs = 0
                             user.usage_qr_with_logo = 0
                             user.usage_editable_links = 0
+                            # Clear cancellation date if it exists (User resubscribed)
+                            user.cancellation_date = None
                             print(f"DEBUG: Updated User {user.id} to NEW Plan ID {internal_plan.id} (Limits & Usage Counters Reset)")
                         else:
                             if not user.permanent_custom_limits:
@@ -543,6 +549,8 @@ def process_subscription_authenticated(event_data, webhook_event):
                             user.usage_qrs = 0
                             user.usage_qr_with_logo = 0
                             user.usage_editable_links = 0
+                            # Clear cancellation date (User renewed)
+                            user.cancellation_date = None
                             print(f"DEBUG: User {user.id} renewed same Plan ID {internal_plan.id} (Usage Counters Reset)")
                 
                 # Update billing info

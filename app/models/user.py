@@ -29,6 +29,9 @@ class User(db.Model):
     # Custom Limits (JSON) - Overrides Plan Limits
     custom_limits = db.Column(db.Text, nullable=True)
     permanent_custom_limits = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Subscription Cancellation Tracking
+    cancellation_date = db.Column(db.DateTime, nullable=True)
  
     def get_limit(self, limit_name):
         """
