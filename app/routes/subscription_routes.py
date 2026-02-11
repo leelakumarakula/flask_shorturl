@@ -638,7 +638,7 @@ def _downgrade_user_to_free(user_id):
         # 1. FreeLinkCount: show_short=True, qr_code is None
         FreeLinkCount = Urls.query.filter_by(
             user_id=user_id, 
-            plan_name="Free", 
+            plan_name="FREE", 
             show_short=True, 
             qr_code=None
         ).count()
@@ -646,14 +646,14 @@ def _downgrade_user_to_free(user_id):
         # 2. bothlinkandqr: show_short=True, qr_code is NOT None
         bothlinkandqr = Urls.query.filter_by(
             user_id=user_id, 
-            plan_name="Free", 
+            plan_name="FREE", 
             show_short=True
         ).filter(Urls.qr_code.isnot(None)).count()
         
         # 3. FreeQrCount: show_short=False, qr_code is NOT None
         FreeQrCount = Urls.query.filter_by(
             user_id=user_id, 
-            plan_name="Free", 
+            plan_name="FREE", 
             show_short=False
         ).filter(Urls.qr_code.isnot(None)).count()
         

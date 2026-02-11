@@ -11,7 +11,7 @@ from app.models.user import User
 from app.models.plan import Plan
 from app.models.billing_info import BillingInfo
 import requests
- 
+from app.routes.subscription_routes import _downgrade_user_to_free
  
 def verify_webhook_signature(payload_body, signature, secret):
     """
@@ -430,17 +430,18 @@ def process_subscription_cancelled(event_data, webhook_event):
                     # Downgrade user to Free plan ONLY if no other active subscription exists
                     user = User.query.get(sub.user_id)
                     if user:
-                        free_plan = Plan.query.filter_by(name='Free').first()
-                        if free_plan:
-                            user.plan_id = free_plan.id
-                            user.custom_limits = None
-                            # Set usage counters to Free plan limits (not zero)
-                            # This gives users the full Free plan quota
-                            user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
-                            user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
-                            user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
-                            user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
-                            print(f"DEBUG: Downgraded user {user.id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
+                        _downgrade_user_to_free(user.id)
+                        # free_plan = Plan.query.filter_by(name='Free').first()
+                        # if free_plan:
+                        #     user.plan_id = free_plan.id
+                        #     user.custom_limits = None
+                        #     # Set usage counters to Free plan limits (not zero)
+                        #     # This gives users the full Free plan quota
+                        #     user.usage_links = free_plan.max_links if free_plan.max_links != -1 else 0
+                        #     user.usage_qrs = free_plan.max_qrs if free_plan.max_qrs != -1 else 0
+                        #     user.usage_qr_with_logo = free_plan.max_qr_with_logo if free_plan.max_qr_with_logo != -1 else 0
+                        #     user.usage_editable_links = free_plan.max_editable_links if free_plan.max_editable_links != -1 else 0
+                        print(f"DEBUG: Downgraded user {user.id} to Free plan with limits: links={user.usage_links}, qrs={user.usage_qrs}")
                 
                 db.session.commit()
                 print(f"DEBUG: Cancelled subscription {subscription_id}")
