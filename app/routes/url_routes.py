@@ -92,12 +92,12 @@ def create(current_user):
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
-    if current_user.cancellation_date:
-        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
-        hours_since_cancel = time_diff.total_seconds() / 3600
+    # if current_user.cancellation_date:
+    #     time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+    #     hours_since_cancel = time_diff.total_seconds() / 3600
        
-        if hours_since_cancel > 1:
-             return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot create new links.", None)
+    #     if hours_since_cancel > 1:
+    #          return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot create new links.", None)
  
     parsed = urlparse(long_url)
     if not parsed.scheme:
@@ -257,9 +257,10 @@ def redirection(short_url):
         if url_id:
             # We need to fetch the owner to check cancellation
             u_entry = Urls.query.filter_by(id_=url_id).first()
+            u_plan=u_entry.plan_name
             if u_entry:
                     owner = User.query.get(u_entry.user_id)
-                    if owner and owner.cancellation_date:
+                    if owner and owner.cancellation_date and u_plan!='FREE':
                         time_diff = datetime.datetime.utcnow() - owner.cancellation_date
                         hours_since_cancel = time_diff.total_seconds() / 3600
                        
@@ -275,6 +276,7 @@ def redirection(short_url):
     else:
         # Redis MISS → fallback to DB
         url_entry = Urls.query.filter_by(short=short_url).first()
+        u_plan=url_entry.plan_name
         if not url_entry:
             return api_response(False, "URL does not exist", None)
  
@@ -292,7 +294,7 @@ def redirection(short_url):
         # -----------------------------
         # TESTING: 10-HOUR GRACE PERIOD CHECK
         # -----------------------------
-        if owner and owner.cancellation_date:
+        if owner and owner.cancellation_date and u_plan!='FREE':
             time_diff = datetime.datetime.utcnow() - owner.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
            
@@ -416,13 +418,14 @@ def redirection(short_url):
 @token_required
 def get_analytics(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
+    u_plan=url_entry.plan_name
     if not url_entry:
         return api_response(False, "URL not found or not yours", None)
  
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
-    if current_user.cancellation_date:
+    if current_user.cancellation_date and u_plan!='FREE':
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
        
@@ -592,6 +595,7 @@ def reset_password():
 @token_required
 def my_urls(current_user):
     urls = Urls.query.filter_by(user_id=current_user.id).all()
+    
    
     # -----------------------------
     # 60-DAY GRACE PERIOD CHECK - FREEZE ACCOUNT
@@ -610,7 +614,9 @@ def my_urls(current_user):
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK
     # -----------------------------
-    if current_user.cancellation_date:
+    free_urls = [u for u in urls if u.plan_name == "FREE"]
+
+    if current_user.cancellation_date :
          # Calculate hours since cancellation
 
          time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
@@ -620,7 +626,17 @@ def my_urls(current_user):
              # Grace period expired -> Return empty list or frozen state
              return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                 "user_id": current_user.id,
-                "urls": [],
+                "urls": [{
+                    "title": u.title,
+                "shorturl": f"{base_url}/{u.short}" if u.short else None,
+                "shortcode": u.short,
+                "long": u.long,
+                "created_at": u.created_at.isoformat(),
+                "qr_code": build_static_url(u.qr_code),
+                "show_short": u.show_short,
+                "hits": UrlAnalytics.query.filter_by(url_id=u.id_).count()
+                }for u in free_urls
+                ],
                 "is_frozen": True
              })
  
@@ -664,12 +680,12 @@ def delete_url(current_user, short_url):
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
-    if current_user.cancellation_date:
-        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
-        hours_since_cancel = time_diff.total_seconds() / 3600
+    # if current_user.cancellation_date:
+    #     time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+    #     hours_since_cancel = time_diff.total_seconds() / 3600
        
-        if hours_since_cancel > 1:
-                return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot delete.", None)
+    #     if hours_since_cancel > 1:
+    #             return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot delete.", None)
  
     # ✔ Convert relative QR path to absolute
     if url_entry.qr_code:
@@ -1136,7 +1152,7 @@ def generate_qr(current_user):
    
     # Allow frontend to pass plan_name
     req_plan_name = data.get("plan_name")
-    final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'Free')
+    final_plan_name = req_plan_name if req_plan_name else (plan.name if plan else 'FREE')
  
     new_url = Urls(
         long=long_url,
