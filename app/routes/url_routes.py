@@ -279,7 +279,7 @@ def redirection(short_url):
         # Redis MISS → fallback to DB
         url_entry = Urls.query.filter_by(short=short_url).first()
         if not url_entry:
-            resp, _ = api_response(False, "URL does not exist", None)
+            resp, _ = api_response(False, "URL does not exist or is inactive", None)
             return resp, 404
         u_plan=url_entry.plan_name
         # -----------------------------
