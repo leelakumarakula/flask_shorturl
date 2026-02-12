@@ -25,6 +25,7 @@ from ..utils.passwords import verify_and_upgrade_password
 from ..utils.static_urls import build_static_url
 from ..utils.qr_generator import generate_styled_qr
 from ..models.subscription import Subscription, RazorpaySubscriptionPlan
+from ..models.plan import Plan
 from ..models.subscription_history import SubscriptionHistory
 from ..models.billing_info import BillingInfo
 from ..models.webhook_events import WebhookEvent
@@ -719,60 +720,132 @@ from sqlalchemy import and_
 @url_bp.route('/totalclicks', methods=['GET'])
 @token_required
 def dashboard_stats(current_user):
-    urls = Urls.query.filter_by(user_id=current_user.id).all()
-    url_ids = [u.id_ for u in urls]
- 
-    total_links = len(urls)
- 
-    if not url_ids:
-        total_clicks = 0
-        clicks_today = 0
+    # Determine if we should restrict view (Subscription Cancelled > 1 hour ago)
+    restrict_view = False
+    if current_user.cancellation_date:
+        time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
+        hours_since_cancel = time_diff.total_seconds() / 3600
+        if hours_since_cancel > 1:
+            restrict_view = True
+
+    if restrict_view:
+        # FILTER ONLY FREE LINKS
+        free_urls = Urls.query.filter_by(user_id=current_user.id, plan_name="FREE").all()
+        total_links = len(free_urls)
+        url_ids = [u.id_ for u in free_urls]
+
+        if not url_ids:
+            total_clicks = 0
+            clicks_today = 0
+        else:
+            total_clicks = UrlAnalytics.query.filter(
+                UrlAnalytics.url_id.in_(url_ids)
+            ).count()
+
+            # -----------------------------
+            # FIX: IST TIME RANGE FOR TODAY
+            # -----------------------------
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.datetime.now(ist)
+
+            # today's date in IST
+            today_ist = now_ist.date()
+
+            # start and end of the IST day (converted to UTC for querying DB)
+            start_ist = ist.localize(datetime.datetime(today_ist.year, today_ist.month, today_ist.day, 0, 0, 0))
+            end_ist = start_ist + datetime.timedelta(days=1)
+
+            start_utc = start_ist.astimezone(pytz.utc)
+            end_utc = end_ist.astimezone(pytz.utc)
+
+            # Query UTC timestamps using the calculated range
+            clicks_today = UrlAnalytics.query.filter(
+                UrlAnalytics.url_id.in_(url_ids),
+                UrlAnalytics.timestamp >= start_utc,
+                UrlAnalytics.timestamp < end_utc
+            ).count()
+        
+        total_short_links = Urls.query.filter_by(
+            user_id=current_user.id,
+            show_short=True,
+            plan_name="FREE" 
+        ).count()
+
+        total_qrs = Urls.query.filter(
+            Urls.user_id == current_user.id,
+            Urls.qr_code.isnot(None),
+            Urls.plan_name == "FREE"
+        ).count()
+
     else:
-        total_clicks = UrlAnalytics.query.filter(
-            UrlAnalytics.url_id.in_(url_ids)
+        # NORMAL VIEW (All links)
+        urls = Urls.query.filter_by(user_id=current_user.id).all()
+        url_ids = [u.id_ for u in urls]
+        total_links = len(urls)
+
+        if not url_ids:
+            total_clicks = 0
+            clicks_today = 0
+            total_short_links = 0
+            total_qrs = 0
+        else:
+            total_clicks = UrlAnalytics.query.filter(
+                UrlAnalytics.url_id.in_(url_ids)
+            ).count()
+
+            # -----------------------------
+            # FIX: IST TIME RANGE FOR TODAY
+            # -----------------------------
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.datetime.now(ist)
+
+            # today's date in IST
+            today_ist = now_ist.date()
+
+            # start and end of the IST day (converted to UTC for querying DB)
+            start_ist = ist.localize(datetime.datetime(today_ist.year, today_ist.month, today_ist.day, 0, 0, 0))
+            end_ist = start_ist + datetime.timedelta(days=1)
+
+            start_utc = start_ist.astimezone(pytz.utc)
+            end_utc = end_ist.astimezone(pytz.utc)
+
+            # Query UTC timestamps using the calculated range
+            clicks_today = UrlAnalytics.query.filter(
+                UrlAnalytics.url_id.in_(url_ids),
+                UrlAnalytics.timestamp >= start_utc,
+                UrlAnalytics.timestamp < end_utc
+            ).count()
+
+        # your new fields (unchanged)
+        total_short_links = Urls.query.filter_by(
+            user_id=current_user.id,
+            show_short=True
         ).count()
- 
-        # -----------------------------
-        # FIX: IST TIME RANGE FOR TODAY
-        # -----------------------------
-        ist = pytz.timezone("Asia/Kolkata")
-        now_ist = datetime.datetime.now(ist)
- 
-        # today's date in IST
-        today_ist = now_ist.date()
- 
-        # start and end of the IST day (converted to UTC for querying DB)
-        start_ist = ist.localize(datetime.datetime(today_ist.year, today_ist.month, today_ist.day, 0, 0, 0))
-        end_ist = start_ist + datetime.timedelta(days=1)
- 
-        start_utc = start_ist.astimezone(pytz.utc)
-        end_utc = end_ist.astimezone(pytz.utc)
- 
-        # Query UTC timestamps using the calculated range
-        clicks_today = UrlAnalytics.query.filter(
-            UrlAnalytics.url_id.in_(url_ids),
-            UrlAnalytics.timestamp >= start_utc,
-            UrlAnalytics.timestamp < end_utc
+
+        total_qrs = Urls.query.filter(
+            Urls.user_id == current_user.id,
+            Urls.qr_code.isnot(None)
         ).count()
- 
-    # your new fields (unchanged)
-    total_short_links = Urls.query.filter_by(
-        user_id=current_user.id,
-        show_short=True
-    ).count()
- 
-    total_qrs = Urls.query.filter(
-        Urls.user_id == current_user.id,
-        Urls.qr_code.isnot(None)
-    ).count()
- 
+    plan_links = 0
+    plan_qrs = 0
+    user_info = User.query.filter_by(id=current_user.id).first()
+    usage_links=user_info.usage_links
+    usage_qrs=user_info.usage_qrs
+    user_plan=user_info.plan_id
+    plan_details=Plan.query.filter_by(id=user_plan).first()
+    plan_links=plan_details.max_links
+    plan_qrs=plan_details.max_qrs
     return api_response(True, "Dashboard stats", {
         "user_id": current_user.id,
         "total_links": total_links,
         "total_clicks": total_clicks,
         "clicks_today": clicks_today,
         "total_qrs": total_qrs,
-        "total_short_links": total_short_links
+        "total_short_links": total_short_links,
+        "usage_links": usage_links,
+        "usage_qrs": usage_qrs,
+        "plan_links": plan_links,
+        "plan_qrs": plan_qrs
     })
  
  
