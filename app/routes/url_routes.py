@@ -88,14 +88,14 @@ def create(current_user):
  
     if not long_url:
         return api_response(False, "long_url is required", None)
-
+ 
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
     if current_user.cancellation_date:
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
-        
+       
         if hours_since_cancel > 1:
              return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot create new links.", None)
  
@@ -231,7 +231,7 @@ def redirection(short_url):
     long_url = None
     url_id = None
     url_entry = None
-    hours_since_cancel = None #note
+   
  
     try:
         if extensions.redis_client:
@@ -246,42 +246,38 @@ def redirection(short_url):
             payload = json.loads(cached)
             long_url = payload.get("long")
             url_id = payload.get("id")          # using id_
-
-            # -----------------------------
-            # REDIS HIT: Verify owner status (Testing: 2-hour grace period)
-            # -----------------------------
-            if url_id:
-                # We need to fetch the owner to check cancellation
-                # Since we don't have user_id in payload, fetch URL entry first
-                u_entry = Urls.query.filter_by(id_=url_id).first()
-                if u_entry:
-                     owner = User.query.get(u_entry.user_id)
-                     if owner and owner.cancellation_date:
+        except:
+            # If JSON failed, assume raw string
+            long_url = cached
+            url_id = None
+ 
+        # -----------------------------
+        # REDIS HIT: Verify owner status (Testing: 2-hour grace period)
+        # -----------------------------
+        if url_id:
+            # We need to fetch the owner to check cancellation
+            u_entry = Urls.query.filter_by(id_=url_id).first()
+            if u_entry:
+                    owner = User.query.get(u_entry.user_id)
+                    if owner and owner.cancellation_date:
                         time_diff = datetime.datetime.utcnow() - owner.cancellation_date
                         hours_since_cancel = time_diff.total_seconds() / 3600
-                        
-                        # if hours_since_cancel > 2:
-                        if hours_since_cancel is not None and hours_since_cancel > 1:
-                     
-                     
+                       
+                        if hours_since_cancel > 1:
                             # remove from redis
                             if extensions.redis_client:
                                 extensions.redis_client.delete(f"short:{short_url}")
                             # Block Access
-                            return api_response(False, " Redis Cache Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
-        # except:
-        #     # If JSON failed, assume raw string
-        #     long_url = cached
-        #     url_id = None   note
-        except json.JSONDecodeError:
-            long_url = cached.decode() if isinstance(cached, bytes) else cached
-            url_id = None
+                            # api_response returns (json, 200). We need (json, 404)
+                            resp, _ = api_response(False, " Redis Cache Hit: This link is no longer active due to subscription expiry (Testing).", None)
+                            return resp, 404
+ 
     else:
         # Redis MISS → fallback to DB
         url_entry = Urls.query.filter_by(short=short_url).first()
         if not url_entry:
             return api_response(False, "URL does not exist", None)
-
+ 
         # -----------------------------
         # 60-DAY GRACE PERIOD CHECK
         # -----------------------------
@@ -292,18 +288,18 @@ def redirection(short_url):
         #     if days_since_cancel > 60:
         #          # GRACE PERIOD EXPIRED -> Block Access
         #          return api_response(False, "This link is no longer active due to subscription expiry.", None), 404
-
+ 
         # -----------------------------
         # TESTING: 10-HOUR GRACE PERIOD CHECK
         # -----------------------------
         if owner and owner.cancellation_date:
             time_diff = datetime.datetime.utcnow() - owner.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
-            
-            # if hours_since_cancel > 2: note
-            if hours_since_cancel is not None and hours_since_cancel > 1:
+           
+            if hours_since_cancel > 1:
                  # GRACE PERIOD EXPIRED -> Block Access
-                 return api_response(False, "Database Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
+                 resp, _ = api_response(False, "Database Hit: This link is no longer active due to subscription expiry (Testing).", None)
+                 return resp, 404
  
         long_url = url_entry.long
         url_id = url_entry.id_                 # using id_
@@ -412,16 +408,7 @@ def redirection(short_url):
     # -------------------------------------
     # 7) Redirect to the long URL
     # -------------------------------------
-    # return redirect(long_url, code=302) note
-    # -------------------------------------
-# 7) Redirect to the long URL
-# -------------------------------------
-    if not long_url:
-        return api_response(False, "Invalid or expired short URL", None), 404
-
-    return redirect(long_url, code=302) 
-
-    
+    return redirect(long_url, code=302)
  
  
  
@@ -431,14 +418,14 @@ def get_analytics(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or not yours", None)
-
+ 
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
     if current_user.cancellation_date:
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
-        
+       
         if hours_since_cancel > 1:
                 return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                 "is_frozen": True
@@ -605,7 +592,7 @@ def reset_password():
 @token_required
 def my_urls(current_user):
     urls = Urls.query.filter_by(user_id=current_user.id).all()
-    
+   
     # -----------------------------
     # 60-DAY GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
@@ -619,12 +606,13 @@ def my_urls(current_user):
     #             "urls": [],
     #             "is_frozen": True
     #          })
-
+ 
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK
     # -----------------------------
     if current_user.cancellation_date:
          # Calculate hours since cancellation
+
          time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
          hours_since_cancel = time_diff.total_seconds() / 3600
          
@@ -635,7 +623,7 @@ def my_urls(current_user):
                 "urls": [],
                 "is_frozen": True
              })
-
+ 
     base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
     return api_response(True, "sending All url details", {
         "user_id": current_user.id,
@@ -672,14 +660,14 @@ def delete_url(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found or you don't have permission to delete", None)
-
+ 
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
     if current_user.cancellation_date:
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
-        
+       
         if hours_since_cancel > 1:
                 return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot delete.", None)
  
@@ -779,14 +767,14 @@ def get_url_details(current_user, short_url):
     url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
     if not url_entry:
         return api_response(False, "URL not found", None)
-
+ 
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
     if current_user.cancellation_date:
             time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
-            
+           
             if hours_since_cancel > 1:
                  return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                     "is_frozen": True
@@ -822,14 +810,14 @@ def edit_short_url(current_user):
         url = Urls.query.filter_by(short=old_short, user_id=current_user.id).first()
         if not url:
             return api_response(False, "Old short URL not found", None)
-
+ 
         # -----------------------------
         # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
         # -----------------------------
         if current_user.cancellation_date:
             time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
-            
+           
             if hours_since_cancel > 1:
                  return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot edit.", None)
  
@@ -935,23 +923,23 @@ def delete_account(current_user):
         latest_subscription = Subscription.query.filter_by(
             user_id=current_user.id
         ).order_by(Subscription.created_date.desc()).first()
-        
+       
         # Get latest billing info
         latest_billing = BillingInfo.query.filter_by(
             user_id=current_user.id
         ).order_by(BillingInfo.created_at.desc()).first()
-        
+       
         # Calculate total clicks
         urls = Urls.query.filter_by(user_id=current_user.id).all()
         url_ids = [u.id_ for u in urls]
         total_clicks = UrlAnalytics.query.filter(
             UrlAnalytics.url_id.in_(url_ids)
         ).count() if url_ids else 0
-        
+       
         # Get IP address from request
         xff = request.headers.get("X-Forwarded-For", '')
         ip_address = xff.split(',')[0].strip() if xff else request.remote_addr or "0.0.0.0"
-        
+       
         # Create deletion history record
         deletion_history = UserDeletionHistory(
             user_id=current_user.id,
@@ -961,34 +949,34 @@ def delete_account(current_user):
             phone=current_user.phone,
             organization=current_user.organization,
             account_created_at=current_user.created_at,
-            
+           
             # Subscription info
             last_subscription_plan=latest_subscription.razorpay_plan_id if latest_subscription else None,
             last_subscription_date=latest_subscription.subscription_start_date if latest_subscription else None,
             last_subscription_end_date=latest_subscription.subscription_end_date if latest_subscription else None,
             last_subscription_amount=latest_subscription.plan_amount if latest_subscription else None,
             razorpay_subscription_id=latest_subscription.razorpay_subscription_id if latest_subscription else None,
-            
+           
             # Billing info
             billing_first_name=latest_billing.first_name if latest_billing else None,
             billing_last_name=latest_billing.last_name if latest_billing else None,
             billing_email=latest_billing.email if latest_billing else None,
             billing_phone=latest_billing.phone_number if latest_billing else None,
             billing_address=latest_billing.address if latest_billing else None,
-            
+           
             # Usage statistics
             total_links_created=current_user.usage_links or 0,
             total_qrs_created=current_user.usage_qrs or 0,
             total_clicks=total_clicks,
-            
+           
             # Deletion metadata
             deleted_by='user',
             ip_address=ip_address
         )
-        
+       
         db.session.add(deletion_history)
         db.session.flush()  # Save history before deleting user data
-        
+       
         # ----------------------------------------------
         # 1. Collect all user's URLs
         # ----------------------------------------------
@@ -1037,19 +1025,19 @@ def delete_account(current_user):
         # ----------------------------------------------
         # Delete webhook events for this user
         WebhookEvent.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
-        
+       
         # Delete billing info
         BillingInfo.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
-        
+       
         # Delete subscription history
         SubscriptionHistory.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
-        
+       
         # Delete active subscriptions
         Subscription.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
-
+ 
         # Delete user-specific Razorpay Plans
         RazorpaySubscriptionPlan.query.filter_by(user_id=current_user.id).delete(synchronize_session=False)
-
+ 
         # ----------------------------------------------
         # 7. Delete the user
         # ----------------------------------------------
@@ -1224,6 +1212,7 @@ def test_ip():
         "region": location.get("region"),
         "city": location.get("city")
     })
+ 
  
  
  
