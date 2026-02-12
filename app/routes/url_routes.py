@@ -96,7 +96,7 @@ def create(current_user):
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
         
-        if hours_since_cancel > 2:
+        if hours_since_cancel > 1:
              return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot create new links.", None)
  
     parsed = urlparse(long_url)
@@ -231,7 +231,7 @@ def redirection(short_url):
     long_url = None
     url_id = None
     url_entry = None
-    
+    hours_since_cancel = None #note
  
     try:
         if extensions.redis_client:
@@ -260,17 +260,22 @@ def redirection(short_url):
                         time_diff = datetime.datetime.utcnow() - owner.cancellation_date
                         hours_since_cancel = time_diff.total_seconds() / 3600
                         
-                        if hours_since_cancel > 2:
+                        # if hours_since_cancel > 2:
+                        if hours_since_cancel is not None and hours_since_cancel > 1:
+                     
+                     
                             # remove from redis
                             if extensions.redis_client:
                                 extensions.redis_client.delete(f"short:{short_url}")
                             # Block Access
                             return api_response(False, " Redis Cache Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
-        except:
-            # If JSON failed, assume raw string
-            long_url = cached
+        # except:
+        #     # If JSON failed, assume raw string
+        #     long_url = cached
+        #     url_id = None   note
+        except json.JSONDecodeError:
+            long_url = cached.decode() if isinstance(cached, bytes) else cached
             url_id = None
- 
     else:
         # Redis MISS → fallback to DB
         url_entry = Urls.query.filter_by(short=short_url).first()
@@ -295,7 +300,8 @@ def redirection(short_url):
             time_diff = datetime.datetime.utcnow() - owner.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
             
-            if hours_since_cancel > 2:
+            # if hours_since_cancel > 2: note
+            if hours_since_cancel is not None and hours_since_cancel > 1:
                  # GRACE PERIOD EXPIRED -> Block Access
                  return api_response(False, "Database Hit: This link is no longer active due to subscription expiry (Testing).", None), 404
  
@@ -406,7 +412,16 @@ def redirection(short_url):
     # -------------------------------------
     # 7) Redirect to the long URL
     # -------------------------------------
-    return redirect(long_url, code=302)
+    # return redirect(long_url, code=302) note
+    # -------------------------------------
+# 7) Redirect to the long URL
+# -------------------------------------
+    if not long_url:
+        return api_response(False, "Invalid or expired short URL", None), 404
+
+    return redirect(long_url, code=302) 
+
+    
  
  
  
@@ -424,7 +439,7 @@ def get_analytics(current_user, short_url):
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
         
-        if hours_since_cancel > 2:
+        if hours_since_cancel > 1:
                 return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                 "is_frozen": True
                 })
@@ -613,7 +628,7 @@ def my_urls(current_user):
          time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
          hours_since_cancel = time_diff.total_seconds() / 3600
          
-         if hours_since_cancel > 2:
+         if hours_since_cancel > 1:
              # Grace period expired -> Return empty list or frozen state
              return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                 "user_id": current_user.id,
@@ -665,7 +680,7 @@ def delete_url(current_user, short_url):
         time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
         hours_since_cancel = time_diff.total_seconds() / 3600
         
-        if hours_since_cancel > 2:
+        if hours_since_cancel > 1:
                 return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot delete.", None)
  
     # ✔ Convert relative QR path to absolute
@@ -772,7 +787,7 @@ def get_url_details(current_user, short_url):
             time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
             
-            if hours_since_cancel > 2:
+            if hours_since_cancel > 1:
                  return api_response(True, "Account frozen due to subscription expiry (Testing).", {
                     "is_frozen": True
                  })
@@ -815,7 +830,7 @@ def edit_short_url(current_user):
             time_diff = datetime.datetime.utcnow() - current_user.cancellation_date
             hours_since_cancel = time_diff.total_seconds() / 3600
             
-            if hours_since_cancel > 2:
+            if hours_since_cancel > 1:
                  return api_response(False, "Account frozen due to subscription expiry (Testing). Cannot edit.", None)
  
         # -----------------------------
