@@ -257,8 +257,9 @@ def redirection(short_url):
         if url_id:
             # We need to fetch the owner to check cancellation
             u_entry = Urls.query.filter_by(id_=url_id).first()
-            u_plan=u_entry.plan_name
+            
             if u_entry:
+                    u_plan=u_entry.plan_name
                     owner = User.query.get(u_entry.user_id)
                     if owner and owner.cancellation_date and u_plan!='FREE':
                         time_diff = datetime.datetime.utcnow() - owner.cancellation_date
@@ -276,11 +277,10 @@ def redirection(short_url):
     else:
         # Redis MISS → fallback to DB
         url_entry = Urls.query.filter_by(short=short_url).first()
-        u_plan=url_entry.plan_name
         if not url_entry:
             resp, _ = api_response(False, "URL does not exist", None)
             return resp, 404
- 
+        u_plan=url_entry.plan_name
         # -----------------------------
         # 60-DAY GRACE PERIOD CHECK
         # -----------------------------
