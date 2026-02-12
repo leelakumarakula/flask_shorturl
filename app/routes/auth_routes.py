@@ -118,7 +118,8 @@ def token_required(f):
  
         try:
             payload = decode_token(token)
-            current_user = User.query.get(payload['user_id'])
+            current_user = User.query.filter_by(id=payload['user_id'],email=payload['email']).first()
+
             if not current_user:
                 return api_response(False, "User not found!", None)
         except Exception:

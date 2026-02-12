@@ -278,7 +278,8 @@ def redirection(short_url):
         url_entry = Urls.query.filter_by(short=short_url).first()
         u_plan=url_entry.plan_name
         if not url_entry:
-            return api_response(False, "URL does not exist", None)
+            resp, _ = api_response(False, "URL does not exist", None)
+            return resp, 404
  
         # -----------------------------
         # 60-DAY GRACE PERIOD CHECK
@@ -595,8 +596,7 @@ def reset_password():
 @token_required
 def my_urls(current_user):
     urls = Urls.query.filter_by(user_id=current_user.id).all()
-    
-   
+    base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
     # -----------------------------
     # 60-DAY GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
@@ -640,7 +640,7 @@ def my_urls(current_user):
                 "is_frozen": True
              })
  
-    base_url = current_app.config.get("BASE_URL", "http://127.0.0.1:5000")
+
     return api_response(True, "sending All url details", {
         "user_id": current_user.id,
         "urls": [
