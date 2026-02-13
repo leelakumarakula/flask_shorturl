@@ -9,3 +9,7 @@ def root():
     return api_response(True, "Use Angular frontend for UI.", None)
 
 
+
+@core_bp.route("/health")
+def health():
+    return {"status": "ok"}, 200
