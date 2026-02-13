@@ -6,6 +6,6 @@ core_bp = Blueprint("core", __name__)
 
 @core_bp.route("/")
 def root():
-    return api_response(True, "Welcome to API. Use Angular frontend for UI.", None)
+    return api_response(True, "Welcome to API Vinodh. Use Angular frontend for UI.", None)
 
 
