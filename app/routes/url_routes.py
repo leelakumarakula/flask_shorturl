@@ -24,6 +24,7 @@ from ..models.user import User
 from ..utils.passwords import verify_and_upgrade_password
 from ..utils.static_urls import build_static_url
 from ..utils.qr_generator import generate_styled_qr
+from ..utils.security import is_unsafe_url # Import security check
 from ..models.subscription import Subscription, RazorpaySubscriptionPlan
 from ..models.plan import Plan
 from ..models.subscription_history import SubscriptionHistory
@@ -31,7 +32,7 @@ from ..models.billing_info import BillingInfo
 from ..models.webhook_events import WebhookEvent
 from ..models.user_deletion_history import UserDeletionHistory
 from ..models.user_deletion_history import UserDeletionHistory
- 
+
  
 url_bp = Blueprint("url", __name__)
  
@@ -89,7 +90,24 @@ def create(current_user):
  
     if not long_url:
         return api_response(False, "long_url is required", None)
- 
+
+    # -----------------------------
+    # SECURITY CHECK: BLOCK BAD LINKS
+    # -----------------------------
+    is_unsafe, reason = is_unsafe_url(long_url)
+    if is_unsafe:
+         return api_response(False, f"Link creation blocked: {reason}", None)
+
+    if title:
+        is_unsafe_title, _ = is_unsafe_url(title)
+        if is_unsafe_title:
+             return api_response(False, f"Link creation blocked: Title contains inappropriate content.", None)
+
+    if custom_short:
+        is_unsafe_custom, _ = is_unsafe_url(custom_short)
+        if is_unsafe_custom:
+             return api_response(False, f"Link creation blocked: Custom slug contains inappropriate content.", None)
+
     # -----------------------------
     # TESTING: 10-HOUR GRACE PERIOD CHECK - FREEZE ACCOUNT
     # -----------------------------
@@ -1278,6 +1296,94 @@ def generate_qr(current_user):
  
  
  
+
+@url_bp.route('/add-qr/<short_url>', methods=['POST'])
+@token_required
+def add_qr_to_existing(current_user, short_url):
+    import os
+    # 1. Fetch URL
+    url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
+    if not url_entry:
+        return api_response(False, "URL not found or unauthorized", None)
+
+    # 2. Check if QR already exists
+    if url_entry.qr_code:
+        return api_response(False, "QR code already exists for this link", {
+            "qr_code": build_static_url(url_entry.qr_code)
+        })
+
+    # 3. Check Limits
+    limit_qrs = current_user.get_limit('max_qrs')
+    if limit_qrs != -1 and current_user.usage_qrs >= limit_qrs:
+         return api_response(False, f"QR code limit reached ({limit_qrs}). Please upgrade.", None)
+
+    # 4. Generate QR
+    # Default styling (Basic Black/Square)
+    color_dark = "#000000"
+    style = "square"
+    logo_data = None
+    logo_path = None
+    
+    # Enforce default logo if plan doesn't allow styling (checking limit)
+    # Note: For existing links, we don't have user input for style, so we default.
+    # But if we were to support custom style, we'd need inputs. 
+    # Here we just generate a standard QR.
+    
+    if current_user.plan and not current_user.get_limit('allow_qr_styling'):
+         default_logo = os.path.join(current_app.static_folder or "static", "image.png")
+         if os.path.exists(default_logo):
+              logo_path = default_logo
+
+    try:
+        static_rel = generate_styled_qr(short_url, color_dark, style, logo_data, logo_path=logo_path)
+        
+        # 5. Update DB
+        url_entry.qr_code = static_rel
+        current_user.usage_qrs = (current_user.usage_qrs or 0) + 1
+        
+        db.session.add(current_user)
+        db.session.commit()
+        
+        return api_response(True, "QR code generated successfully", {
+            "qr_code": build_static_url(static_rel),
+            "short_url": short_url
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return api_response(False, f"Failed to generate QR: {str(e)}", None)
+
+
+
+@url_bp.route('/enable-short-link/<short_url>', methods=['POST'])
+@token_required
+def enable_short_link(current_user, short_url):
+    url_entry = Urls.query.filter_by(short=short_url, user_id=current_user.id).first()
+    if not url_entry:
+        return api_response(False, "URL not found or unauthorized", None)
+
+    # If already enabled, just return success (idempotent)
+    if url_entry.show_short:
+        return api_response(True, "Short link already enabled", {"short_url": short_url})
+
+    # Check Usage Limit
+    limit_links = current_user.get_limit('max_links')
+    if limit_links != -1 and current_user.usage_links >= limit_links:
+         return api_response(False, f"Link creation limit reached ({limit_links}). Upgrade to use Short Link feature.", None)
+
+    # Enable and Increment Usage
+    try:
+        url_entry.show_short = True
+        current_user.usage_links = (current_user.usage_links or 0) + 1
+        db.session.add(current_user)
+        db.session.commit()
+        
+        return api_response(True, "Short link enabled successfully", {"short_url": short_url})
+    except Exception as e:
+        db.session.rollback()
+        return api_response(False, f"Failed to enable short link: {str(e)}", None)
+
+
 @url_bp.route('/test-ip', methods=['POST'])
 def test_ip():
     """
